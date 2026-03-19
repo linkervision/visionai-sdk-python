@@ -26,6 +26,10 @@ class _BaseSdkClient:
             max_connections: Maximum number of concurrent connections in the pool.
             max_keepalive_connections: Maximum number of idle keep-alive connections.
         """
+        if not auth_url or not auth_url.strip():
+            raise ValueError("auth_url must not be empty")
+        if not vlm_url or not vlm_url.strip():
+            raise ValueError("vlm_url must not be empty")
         self.auth_url = auth_url
         self.vlm_url = vlm_url
         self.verify_ssl = verify_ssl
@@ -34,14 +38,15 @@ class _BaseSdkClient:
         self.max_keepalive_connections = max_keepalive_connections
 
 
-    def _build_url(self, base_url: str, path: str) -> str:
+    @staticmethod
+    def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-    def _build_header(self, access_token: str | None = None) -> dict[str, str]:
-        """Build common HTTP headers, optionally including a Bearer token."""
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if access_token:
-            headers["Authorization"] = f"Bearer {access_token}"
-        return headers
+    @staticmethod
+    def _build_auth_header(access_token: str) -> dict[str, str]:
+        """Build authorization header."""
+        if not access_token:
+            raise ValueError("access_token must not be empty")
+        return {"Authorization": f"Bearer {access_token}"}
