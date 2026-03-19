@@ -1,0 +1,14 @@
+[project]
+name = "visionai-sdk-python"
+version = "0.1.0"
+description = "VisionAI SDK for Python"
+readme = "README.md"
+authors = [
+    { name = "Tony Yang", email = "tonyyang@linkervision.com" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
