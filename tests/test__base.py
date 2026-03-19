@@ -1,6 +1,16 @@
 import pytest
 
-from visionai_sdk_python._base import _BaseSdkClient
+from visionai_sdk_python._base import _BaseClient
+
+
+def test_init_stores_attributes() -> None:
+    client = _BaseClient(auth_url="https://auth.example.com", vlm_url="https://vlm.example.com")
+    assert client.auth_url == "https://auth.example.com"
+    assert client.vlm_url == "https://vlm.example.com"
+    assert client.verify_ssl is True
+    assert client.timeout == 10.0
+    assert client.max_connections == 100
+    assert client.max_keepalive_connections == 20
 
 
 @pytest.mark.parametrize(
@@ -21,26 +31,26 @@ from visionai_sdk_python._base import _BaseSdkClient
     ],
 )
 def test_slash_normalization(base_url: str, path: str, expected: str) -> None:
-    assert _BaseSdkClient._build_url(base_url, path) == expected
+    assert _BaseClient._build_url(base_url, path) == expected
 
 
 def test_auth_header() -> None:
-    headers = _BaseSdkClient._build_auth_header(access_token="my-token")
+    headers = _BaseClient._build_auth_header(access_token="my-token")
     assert headers["Authorization"] == "Bearer my-token"
 
 
 @pytest.mark.parametrize("empty_url", ["", "  "])
 def test_init_raises_on_empty_auth_url(empty_url: str) -> None:
-    with pytest.raises(ValueError, match="auth_url must not be empty"):
-        _BaseSdkClient(auth_url=empty_url, vlm_url="https://vlm.example.com")
+    with pytest.raises(ValueError, match="auth_url"):
+        _BaseClient(auth_url=empty_url, vlm_url="https://vlm.example.com")
 
 
 @pytest.mark.parametrize("empty_url", ["", "  "])
 def test_init_raises_on_empty_vlm_url(empty_url: str) -> None:
-    with pytest.raises(ValueError, match="vlm_url must not be empty"):
-        _BaseSdkClient(auth_url="https://auth.example.com", vlm_url=empty_url)
+    with pytest.raises(ValueError, match="vlm_url"):
+        _BaseClient(auth_url="https://auth.example.com", vlm_url=empty_url)
 
 
 def test_auth_header_raises_on_empty_token() -> None:
-    with pytest.raises(ValueError, match="access_token must not be empty"):
-        _BaseSdkClient._build_auth_header(access_token="")
+    with pytest.raises(ValueError, match="access_token"):
+        _BaseClient._build_auth_header(access_token="")

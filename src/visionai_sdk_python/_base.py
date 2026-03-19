@@ -1,6 +1,6 @@
 
 
-class _BaseSdkClient:
+class _BaseClient:
     """Base class for VisionAI SDK clients.
 
     Holds shared connection configuration and provides
@@ -26,12 +26,12 @@ class _BaseSdkClient:
             max_connections: Maximum number of concurrent connections in the pool.
             max_keepalive_connections: Maximum number of idle keep-alive connections.
         """
-        if not auth_url or not auth_url.strip():
+        if not auth_url.strip():
             raise ValueError("auth_url must not be empty")
-        if not vlm_url or not vlm_url.strip():
+        if not vlm_url.strip():
             raise ValueError("vlm_url must not be empty")
-        self.auth_url = auth_url
-        self.vlm_url = vlm_url
+        self.auth_url = auth_url.strip()
+        self.vlm_url = vlm_url.strip()
         self.verify_ssl = verify_ssl
         self.timeout = timeout
         self.max_connections = max_connections
