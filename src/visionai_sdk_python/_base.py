@@ -65,13 +65,16 @@ class _BaseClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
-            body: dict = {}
+            body = None
             if e.response.content:
                 try:
                     body = e.response.json()
                 except Exception:
                     pass
-            detail: str = body.get("detail") or body.get("message") or str(e)
+            if isinstance(body, dict):
+                detail: str = body.get("detail") or body.get("message") or str(e)
+            else:
+                detail = str(e)
             status = e.response.status_code
             if status == 401:
                 raise AuthenticationError(detail) from e

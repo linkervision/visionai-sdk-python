@@ -1,7 +1,7 @@
 import httpx
 
 from ._base import _BaseClient
-from .exceptions import NetworkError
+from .exceptions import NetworkError, VisionaiSDKError
 from .models import TokenResponse
 
 class Client(_BaseClient):
@@ -76,8 +76,10 @@ class Client(_BaseClient):
             )
         except httpx.TimeoutException as e:
             raise NetworkError("Request timed out") from e
-        except httpx.ConnectError as e:
-            raise NetworkError(f"Connection failed: {e}") from e
+        except httpx.NetworkError as e:
+            raise NetworkError(f"Network error: {e}") from e
+        except httpx.RequestError as e:
+            raise VisionaiSDKError(f"Request failed: {e}") from e
         self._handle_response(response)
         return TokenResponse(**response.json())
 
@@ -111,7 +113,9 @@ class Client(_BaseClient):
             )
         except httpx.TimeoutException as e:
             raise NetworkError("Request timed out") from e
-        except httpx.ConnectError as e:
-            raise NetworkError(f"Connection failed: {e}") from e
+        except httpx.NetworkError as e:
+            raise NetworkError(f"Network error: {e}") from e
+        except httpx.RequestError as e:
+            raise VisionaiSDKError(f"Request failed: {e}") from e
         self._handle_response(response)
         return TokenResponse(**response.json())

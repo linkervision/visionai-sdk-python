@@ -84,7 +84,7 @@ def test_login_network_error(connect_error_transport: httpx.MockTransport) -> No
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=connect_error_transport)
 
-    with pytest.raises(NetworkError, match="Connection failed"):
+    with pytest.raises(NetworkError, match="Network error"):
         c.login("user@example.com", "password")
 
 
@@ -137,7 +137,7 @@ def test_get_access_token_network_error(connect_error_transport: httpx.MockTrans
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=connect_error_transport)
 
-    with pytest.raises(NetworkError, match="Connection failed"):
+    with pytest.raises(NetworkError, match="Network error"):
         c.get_access_token("platform-admin", "platform-admin-secret")
 
 
