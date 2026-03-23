@@ -63,3 +63,7 @@ dmypy.json
 # Project specific
 *.log
 .python-version
+
+
+# Claude
+.claude/
