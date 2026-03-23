@@ -1,6 +1,7 @@
 import httpx
 
 from ._base import _BaseClient
+from .exceptions import NetworkError
 from .models import TokenResponse
 
 class Client(_BaseClient):
@@ -65,14 +66,19 @@ class Client(_BaseClient):
         if not client_secret.strip():
             raise ValueError("client_secret must not be empty")
 
-        response = self._client.post(
-            self._build_url(self.auth_url, "/api/users/client-token"),
-            json={
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = self._client.post(
+                self._build_url(self.auth_url, "/api/users/client-token"),
+                json={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+            )
+        except httpx.TimeoutException as e:
+            raise NetworkError("Request timed out") from e
+        except httpx.ConnectError as e:
+            raise NetworkError(f"Connection failed: {e}") from e
+        self._handle_response(response)
         return TokenResponse(**response.json())
 
 
@@ -95,12 +101,17 @@ class Client(_BaseClient):
         if not password.strip():
             raise ValueError("password must not be empty")
 
-        response = self._client.post(
-            self._build_url(self.auth_url, "/api/users/jwt"),
-            json={
-                "email": email,
-                "password": password,
-            }
-        )
-        response.raise_for_status()
+        try:
+            response = self._client.post(
+                self._build_url(self.auth_url, "/api/users/jwt"),
+                json={
+                    "email": email,
+                    "password": password,
+                },
+            )
+        except httpx.TimeoutException as e:
+            raise NetworkError("Request timed out") from e
+        except httpx.ConnectError as e:
+            raise NetworkError(f"Connection failed: {e}") from e
+        self._handle_response(response)
         return TokenResponse(**response.json())

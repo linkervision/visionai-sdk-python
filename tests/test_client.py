@@ -2,6 +2,7 @@ import pytest
 import httpx
 
 from visionai_sdk_python.client import Client
+from visionai_sdk_python.exceptions import AuthenticationError, NetworkError, ServerError
 from visionai_sdk_python.models import TokenResponse
 
 AUTH_URL = "https://auth.example.com"
@@ -37,6 +38,14 @@ def server_error_transport() -> httpx.MockTransport:
 
 
 @pytest.fixture
+def connect_error_transport() -> httpx.MockTransport:
+    """Transport that raises ConnectError."""
+    def _raise(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Connection refused")
+    return httpx.MockTransport(_raise)
+
+
+@pytest.fixture
 def mock_client(success_transport: httpx.MockTransport) -> Client:
     """Create a Client with mocked successful transport."""
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
@@ -58,18 +67,25 @@ def test_login_wrong_credentials(unauthorized_transport: httpx.MockTransport) ->
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=unauthorized_transport)
 
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+    with pytest.raises(AuthenticationError, match="Invalid credentials"):
         c.login("user@example.com", "wrong-password")
-    assert exc_info.value.response.status_code == 401
 
 
 def test_login_server_error(server_error_transport: httpx.MockTransport) -> None:
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=server_error_transport)
 
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+    with pytest.raises(ServerError) as exc_info:
         c.login("user@example.com", "password")
-    assert exc_info.value.response.status_code == 503
+    assert exc_info.value.status_code == 503
+
+
+def test_login_network_error(connect_error_transport: httpx.MockTransport) -> None:
+    c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.Client(transport=connect_error_transport)
+
+    with pytest.raises(NetworkError, match="Connection failed"):
+        c.login("user@example.com", "password")
 
 
 def test_login_empty_email(mock_client: Client) -> None:
@@ -104,18 +120,25 @@ def test_get_access_token_wrong_credentials(unauthorized_transport: httpx.MockTr
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=unauthorized_transport)
 
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+    with pytest.raises(AuthenticationError, match="Invalid credentials"):
         c.get_access_token("wrong-id", "wrong-secret")
-    assert exc_info.value.response.status_code == 401
 
 
 def test_get_access_token_server_error(server_error_transport: httpx.MockTransport) -> None:
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=server_error_transport)
 
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+    with pytest.raises(ServerError) as exc_info:
         c.get_access_token("platform-admin", "platform-admin-secret")
-    assert exc_info.value.response.status_code == 503
+    assert exc_info.value.status_code == 503
+
+
+def test_get_access_token_network_error(connect_error_transport: httpx.MockTransport) -> None:
+    c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.Client(transport=connect_error_transport)
+
+    with pytest.raises(NetworkError, match="Connection failed"):
+        c.get_access_token("platform-admin", "platform-admin-secret")
 
 
 def test_get_access_token_empty_client_id(mock_client: Client) -> None:
