@@ -60,7 +60,9 @@ class _BaseClient:
             raise ValueError("access_token must not be empty")
         return {"Authorization": f"Bearer {access_token}"}
 
-    def _handle_response(self, response: httpx.Response) -> httpx.Response:
+
+    @staticmethod
+    def _handle_response(response: httpx.Response) -> httpx.Response:
         """Raise SDK-specific exceptions for non-2xx responses.
 
         Raises:

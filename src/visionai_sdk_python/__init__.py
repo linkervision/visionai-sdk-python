@@ -3,6 +3,7 @@
 A client library for interacting with VisionAI authentication and VLM services.
 """
 
+from .async_client import AsyncClient
 from .client import Client
 from .exceptions import (
     AuthenticationError,
@@ -15,6 +16,7 @@ from .exceptions import (
 from .models import TokenResponse
 
 __all__ = [
+    "AsyncClient",
     "Client",
     "TokenResponse",
     "VisionaiSDKError",

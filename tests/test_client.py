@@ -138,7 +138,7 @@ def test_get_access_token_success(mock_client: Client) -> None:
     # Arrange: mock_client fixture provides a client with successful transport
 
     # Act
-    result = mock_client.get_access_token("platform-admin", "platform-admin-secret")
+    result = mock_client.get_access_token("admin", "secret")
 
     # Assert
     assert isinstance(result, TokenResponse)
@@ -163,7 +163,7 @@ def test_get_access_token_server_error(server_error_transport: httpx.MockTranspo
 
     # Act & Assert
     with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
-        c.get_access_token("platform-admin", "platform-admin-secret")
+        c.get_access_token("admin", "secret")
     assert exc_info.value.status_code == 503
 
 
@@ -174,7 +174,7 @@ def test_get_access_token_network_error(connect_error_transport: httpx.MockTrans
 
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error") as exc_info:
-        c.get_access_token("platform-admin", "platform-admin-secret")
+        c.get_access_token("admin", "secret")
 
 
 def test_get_access_token_empty_client_id(mock_client: Client) -> None:
