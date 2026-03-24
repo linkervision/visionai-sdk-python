@@ -1,3 +1,12 @@
+import httpx
+
+from .exceptions import (
+    APIError,
+    AuthenticationError,
+    ClientError,
+    PermissionDeniedError,
+    ServerError,
+)
 
 
 class _BaseClient:
@@ -50,3 +59,38 @@ class _BaseClient:
         if not access_token:
             raise ValueError("access_token must not be empty")
         return {"Authorization": f"Bearer {access_token}"}
+
+    def _handle_response(self, response: httpx.Response) -> httpx.Response:
+        """Raise SDK-specific exceptions for non-2xx responses.
+
+        Raises:
+            AuthenticationError: If the server returns 401
+            PermissionDeniedError: If the server returns 403
+            ClientError: If the server returns any other 4xx
+            ServerError: If the server returns 5xx
+            APIError: If the server returns any other non-2xx status
+        """
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            body = None
+            if e.response.content:
+                try:
+                    body = e.response.json()
+                except Exception:
+                    pass
+            if isinstance(body, dict):
+                detail: str = body.get("detail") or body.get("message") or str(e)
+            else:
+                detail = str(e)
+            status = e.response.status_code
+            if status == 401:
+                raise AuthenticationError(detail) from e
+            if status == 403:
+                raise PermissionDeniedError(detail) from e
+            if 400 <= status < 500:
+                raise ClientError(status, detail) from e
+            if 500 <= status < 600:
+                raise ServerError(status, detail) from e
+            raise APIError(status, detail)
+        return response
