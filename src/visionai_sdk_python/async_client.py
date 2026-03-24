@@ -1,8 +1,13 @@
+import logging
 import httpx
+import jwt
 
 from ._base import _BaseClient
 from .exceptions import NetworkError, VisionaiSDKError
 from .models import TokenResponse
+
+logger = logging.getLogger(__name__)
+
 
 class AsyncClient(_BaseClient):
     def __init__(
@@ -121,3 +126,39 @@ class AsyncClient(_BaseClient):
             raise VisionaiSDKError(f"Request failed: {e}") from e
         self._handle_response(response)
         return TokenResponse(**response.json())
+
+    async def is_token_valid(self, access_token: str) -> bool:
+        """Check whether a JWT access token is currently valid.
+
+        Validates the token's signature and expiration without raising exceptions.
+
+        Args:
+            access_token: JWT access token to validate.
+
+        Returns:
+            ``True`` if the token passes signature and expiration checks,
+            ``False`` otherwise (invalid token or JWKS service unavailable).
+
+        Note:
+            Logs token validation failures. Unexpected errors will propagate
+            to allow fail-fast behavior for programming errors.
+        """
+        try:
+            await self._jwt_verifier.verify_async(access_token)
+            return True
+        except jwt.InvalidTokenError as e:
+            # Expected: expired, malformed, invalid signature, missing claims
+            logger.warning(
+                "%s: Token validation failed",
+                type(e).__name__,
+                extra={"jwt_error_type": type(e).__name__, "jwt_error_message": str(e)}
+            )
+            return False
+        except jwt.PyJWKClientError as e:
+            # Expected: JWKS endpoint unavailable, network issues
+            logger.error(
+                "%s: JWKS client error during token validation",
+                type(e).__name__,
+                extra={"jwt_error_type": "PyJWKClientError", "jwt_error_message": str(e)}
+            )
+            return False

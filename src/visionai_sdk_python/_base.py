@@ -7,6 +7,7 @@ from .exceptions import (
     PermissionDeniedError,
     ServerError,
 )
+from ._jwt_verifier import JwtVerifier
 
 
 class _BaseClient:
@@ -45,13 +46,12 @@ class _BaseClient:
         self.timeout = timeout
         self.max_connections = max_connections
         self.max_keepalive_connections = max_keepalive_connections
-
+        self._jwt_verifier = JwtVerifier(verify_ssl=verify_ssl, timeout=timeout)
 
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
-
 
     @staticmethod
     def _build_auth_header(access_token: str) -> dict[str, str]:

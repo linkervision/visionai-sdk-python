@@ -10,6 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.12.5",
+    "cryptography>=46.0.5",
+    "PyJWT[cryptography]>=2.8.0",
 ]
 
 [build-system]
