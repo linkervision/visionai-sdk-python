@@ -61,7 +61,15 @@ class _BaseClient:
         return {"Authorization": f"Bearer {access_token}"}
 
     def _handle_response(self, response: httpx.Response) -> httpx.Response:
-        """Raise SDK-specific exceptions for non-2xx responses."""
+        """Raise SDK-specific exceptions for non-2xx responses.
+
+        Raises:
+            AuthenticationError: If the server returns 401
+            PermissionDeniedError: If the server returns 403
+            ClientError: If the server returns any other 4xx
+            ServerError: If the server returns 5xx
+            VisionaiSDKError: If the server returns any other non-2xx status
+        """
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:

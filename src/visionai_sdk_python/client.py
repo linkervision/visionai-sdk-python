@@ -59,7 +59,8 @@ class Client(_BaseClient):
 
         Raises:
             ValueError: If client_id or client_secret is empty
-            httpx.HTTPStatusError: If the request fails
+            NetworkError: If the request times out or a network error occurs
+            VisionaiSDKError: If the request fails for any other reason
         """
         if not client_id.strip():
             raise ValueError("client_id must not be empty")
@@ -96,7 +97,8 @@ class Client(_BaseClient):
 
         Raises:
             ValueError: If email or password is empty
-            httpx.HTTPStatusError: If the request fails
+            NetworkError: If the request times out or a network error occurs
+            VisionaiSDKError: If the request fails for any other reason
         """
         if not email.strip():
             raise ValueError("email must not be empty")
