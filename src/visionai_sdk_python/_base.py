@@ -1,11 +1,11 @@
 import httpx
 
 from .exceptions import (
+    APIError,
     AuthenticationError,
     ClientError,
     PermissionDeniedError,
     ServerError,
-    VisionaiSDKError,
 )
 
 
@@ -68,7 +68,7 @@ class _BaseClient:
             PermissionDeniedError: If the server returns 403
             ClientError: If the server returns any other 4xx
             ServerError: If the server returns 5xx
-            VisionaiSDKError: If the server returns any other non-2xx status
+            APIError: If the server returns any other non-2xx status
         """
         try:
             response.raise_for_status()
@@ -92,5 +92,5 @@ class _BaseClient:
                 raise ClientError(status, detail) from e
             if 500 <= status < 600:
                 raise ServerError(status, detail) from e
-            raise VisionaiSDKError(f"Unexpected status code {status}: {detail}") from e
+            raise APIError(status, detail)
         return response

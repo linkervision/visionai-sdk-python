@@ -56,7 +56,12 @@ def mock_client(success_transport: httpx.MockTransport) -> Client:
 # --- login ---
 
 def test_login_success(mock_client: Client) -> None:
+    # Arrange: mock_client fixture provides a client with successful transport
+
+    # Act
     result = mock_client.login("user@example.com", "correct-password")
+
+    # Assert
     assert isinstance(result, TokenResponse)
     assert result.access_token == TOKEN_PAYLOAD["access_token"]
     assert result.expires_in == TOKEN_PAYLOAD["expires_in"]
@@ -64,46 +69,65 @@ def test_login_success(mock_client: Client) -> None:
 
 
 def test_login_wrong_credentials(unauthorized_transport: httpx.MockTransport) -> None:
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=unauthorized_transport)
 
-    with pytest.raises(AuthenticationError, match="Invalid credentials"):
+    # Act & Assert
+    with pytest.raises(AuthenticationError, match="Invalid credentials") as exc_info:
         c.login("user@example.com", "wrong-password")
+    assert exc_info.value.status_code == 401
 
 
 def test_login_server_error(server_error_transport: httpx.MockTransport) -> None:
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=server_error_transport)
 
-    with pytest.raises(ServerError) as exc_info:
+    # Act & Assert
+    with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
         c.login("user@example.com", "password")
     assert exc_info.value.status_code == 503
 
 
 def test_login_network_error(connect_error_transport: httpx.MockTransport) -> None:
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=connect_error_transport)
 
+    # Act & Assert
     with pytest.raises(NetworkError, match="Network error"):
         c.login("user@example.com", "password")
 
 
 def test_login_empty_email(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="email must not be empty"):
         mock_client.login("", "password")
 
 
 def test_login_empty_password(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="password must not be empty"):
         mock_client.login("user@example.com", "")
 
 
 def test_login_whitespace_email(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="email must not be empty"):
         mock_client.login("   ", "password")
 
 
 def test_login_whitespace_password(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="password must not be empty"):
         mock_client.login("user@example.com", "   ")
 
@@ -111,52 +135,76 @@ def test_login_whitespace_password(mock_client: Client) -> None:
 # --- get_access_token ---
 
 def test_get_access_token_success(mock_client: Client) -> None:
+    # Arrange: mock_client fixture provides a client with successful transport
+
+    # Act
     result = mock_client.get_access_token("platform-admin", "platform-admin-secret")
+
+    # Assert
     assert isinstance(result, TokenResponse)
     assert result.access_token == TOKEN_PAYLOAD["access_token"]
 
 
 def test_get_access_token_wrong_credentials(unauthorized_transport: httpx.MockTransport) -> None:
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=unauthorized_transport)
 
-    with pytest.raises(AuthenticationError, match="Invalid credentials"):
+    # Act & Assert
+    with pytest.raises(AuthenticationError, match="Invalid credentials") as exc_info:
         c.get_access_token("wrong-id", "wrong-secret")
+    assert exc_info.value.status_code == 401
 
 
 def test_get_access_token_server_error(server_error_transport: httpx.MockTransport) -> None:
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=server_error_transport)
 
-    with pytest.raises(ServerError) as exc_info:
+    # Act & Assert
+    with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
         c.get_access_token("platform-admin", "platform-admin-secret")
     assert exc_info.value.status_code == 503
 
 
 def test_get_access_token_network_error(connect_error_transport: httpx.MockTransport) -> None:
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=connect_error_transport)
 
-    with pytest.raises(NetworkError, match="Network error"):
+    # Act & Assert
+    with pytest.raises(NetworkError, match="Network error") as exc_info:
         c.get_access_token("platform-admin", "platform-admin-secret")
 
 
 def test_get_access_token_empty_client_id(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="client_id must not be empty"):
         mock_client.get_access_token("", "secret")
 
 
 def test_get_access_token_empty_client_secret(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
         mock_client.get_access_token("client-id", "")
 
 
 def test_get_access_token_whitespace_client_id(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="client_id must not be empty"):
         mock_client.get_access_token("   ", "secret")
 
 
 def test_get_access_token_whitespace_client_secret(mock_client: Client) -> None:
+    # Arrange: mock_client fixture
+
+    # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
         mock_client.get_access_token("client-id", "   ")
 
@@ -165,33 +213,49 @@ def test_get_access_token_whitespace_client_secret(mock_client: Client) -> None:
 
 def test_client_context_manager(success_transport: httpx.MockTransport) -> None:
     """Test that client properly closes resources when used as context manager."""
+    # Arrange
     with Client(auth_url=AUTH_URL, vlm_url=VLM_URL) as client:
         client._client = httpx.Client(transport=success_transport)
+
+        # Act
         result = client.login("user@example.com", "password")
+
+        # Assert
         assert isinstance(result, TokenResponse)
 
-    # After exiting context manager, client should be closed
+    # Assert: after exiting context manager, client should be closed
     assert client._client.is_closed
 
 
 def test_client_explicit_close(success_transport: httpx.MockTransport) -> None:
     """Test that client can be explicitly closed."""
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=success_transport)
 
+    # Act
     result = c.login("user@example.com", "password")
+
+    # Assert: client is open after use
     assert isinstance(result, TokenResponse)
     assert not c._client.is_closed
 
+    # Act: explicit close
     c.close()
+
+    # Assert: client is closed
     assert c._client.is_closed
 
 
 def test_client_close_idempotent(success_transport: httpx.MockTransport) -> None:
     """Test that calling close() multiple times is safe."""
+    # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=success_transport)
 
+    # Act
     c.close()
     c.close()  # Should not raise
+
+    # Assert
     assert c._client.is_closed
