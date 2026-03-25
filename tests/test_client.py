@@ -2,7 +2,7 @@ import pytest
 import httpx
 
 from visionai_sdk_python.client import Client
-from visionai_sdk_python.exceptions import AuthenticationError, NetworkError, ServerError
+from visionai_sdk_python.exceptions import APIError, AuthenticationError, NetworkError, ServerError
 from visionai_sdk_python.models import TokenResponse
 
 AUTH_URL = "https://auth.example.com"
@@ -43,6 +43,14 @@ def connect_error_transport() -> httpx.MockTransport:
     def _raise(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Connection refused")
     return httpx.MockTransport(_raise)
+
+
+@pytest.fixture
+def api_error_transport() -> httpx.MockTransport:
+    """Transport that returns 310 Too many redirect."""
+    return httpx.MockTransport(
+        lambda r: httpx.Response(310, json={"detail": "Too many redirect"})
+    )
 
 
 @pytest.fixture
@@ -100,6 +108,18 @@ def test_login_network_error(connect_error_transport: httpx.MockTransport) -> No
         c.login("user@example.com", "password")
 
 
+@pytest.mark.asyncio
+async def test_login_api_error(api_error_transport):
+    # Arrange
+    c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.Client(transport=api_error_transport)
+
+    # Act & Assert
+    with pytest.raises(APIError, match="Too many redirect") as exc_info:
+        c.login("user@example.com", "correct-password")
+    assert exc_info.value.status_code == 310
+
+
 def test_login_empty_email(mock_client: Client) -> None:
     # Arrange: mock_client fixture
 
@@ -138,7 +158,7 @@ def test_get_access_token_success(mock_client: Client) -> None:
     # Arrange: mock_client fixture provides a client with successful transport
 
     # Act
-    result = mock_client.get_access_token("platform-admin", "platform-admin-secret")
+    result = mock_client.get_access_token("admin", "secret")
 
     # Assert
     assert isinstance(result, TokenResponse)
@@ -163,7 +183,7 @@ def test_get_access_token_server_error(server_error_transport: httpx.MockTranspo
 
     # Act & Assert
     with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
-        c.get_access_token("platform-admin", "platform-admin-secret")
+        c.get_access_token("admin", "secret")
     assert exc_info.value.status_code == 503
 
 
@@ -174,7 +194,19 @@ def test_get_access_token_network_error(connect_error_transport: httpx.MockTrans
 
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error") as exc_info:
-        c.get_access_token("platform-admin", "platform-admin-secret")
+        c.get_access_token("admin", "secret")
+
+
+@pytest.mark.asyncio
+async def test_get_access_token_api_error(api_error_transport):
+    # Arrange
+    c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.Client(transport=api_error_transport)
+
+    # Act & Assert
+    with pytest.raises(APIError, match="Too many redirect") as exc_info:
+        c.get_access_token("admin", "secret")
+    assert exc_info.value.status_code == 310
 
 
 def test_get_access_token_empty_client_id(mock_client: Client) -> None:
