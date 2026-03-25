@@ -2,7 +2,7 @@ import pytest
 import httpx
 
 from visionai_sdk_python.async_client import AsyncClient
-from visionai_sdk_python.exceptions import AuthenticationError, NetworkError, ServerError
+from visionai_sdk_python.exceptions import APIError, AuthenticationError, NetworkError, ServerError
 from visionai_sdk_python.models import TokenResponse
 
 AUTH_URL = "https://auth.example.com"
@@ -57,6 +57,13 @@ def server_error_transport() -> AsyncMockTransport:
 def connect_error_transport() -> AsyncRaisingTransport:
     """Transport that raises ConnectError."""
     return AsyncRaisingTransport(httpx.ConnectError("Connection refused"))
+
+
+@pytest.fixture
+def api_error_transport() -> AsyncMockTransport:
+    return AsyncMockTransport(
+        lambda r: httpx.Response(310, json={"detail": "Too many redirect"})
+    )
 
 
 @pytest.fixture
@@ -116,6 +123,18 @@ async def test_login_network_error(connect_error_transport: AsyncRaisingTranspor
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error"):
         await c.login("user@example.com", "password")
+
+
+@pytest.mark.asyncio
+async def test_login_api_error(api_error_transport):
+    # Arrange
+    c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.AsyncClient(transport=api_error_transport)
+
+    # Act & Assert
+    with pytest.raises(APIError, match="Too many redirect") as exc_info:
+        await c.login("user@example.com", "correct-password")
+    assert exc_info.value.status_code == 310
 
 
 @pytest.mark.asyncio
@@ -201,6 +220,18 @@ async def test_get_access_token_network_error(connect_error_transport: AsyncRais
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error"):
         await c.get_access_token("admin", "secret")
+
+
+@pytest.mark.asyncio
+async def test_get_access_token_api_error(api_error_transport):
+    # Arrange
+    c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.AsyncClient(transport=api_error_transport)
+
+    # Act & Assert
+    with pytest.raises(APIError, match="Too many redirect") as exc_info:
+        await c.get_access_token("admin", "secret")
+    assert exc_info.value.status_code == 310
 
 
 @pytest.mark.asyncio
