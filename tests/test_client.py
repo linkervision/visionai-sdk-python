@@ -3,18 +3,17 @@ import httpx
 import jwt
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 from visionai_sdk_python.client import Client
 from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
-from visionai_sdk_python.models import TokenResponse
-
-AUTH_URL = "https://auth.example.com"
-VLM_URL = "https://vlm.example.com"
-
-TOKEN_PAYLOAD = {
-    "access_token": "test-jwt-token",
-    "expires_in": 3600,
-    "token_type": "Bearer",
-}
+from visionai_sdk_python.models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel, TokenResponse
+from tests.constants import (
+    AUTH_URL, VLM_URL, TOKEN_PAYLOAD,
+    VALID_NIM_PAYLOAD,
+    NORMAL_PENDING_RESPONSE, NORMAL_RUNNING_RESPONSE, NORMAL_COMPLETED_RESPONSE,
+    ERROR_FAILED_RESPONSE, ERROR_TIMEOUT_RESPONSE,
+)
 
 
 @pytest.fixture
@@ -391,3 +390,118 @@ def test_client_close_idempotent(success_transport: httpx.MockTransport) -> None
 
     # Assert
     assert c._client.is_closed
+
+
+# --- chat / get_chat shared fixtures & helpers ---
+
+def _make_vlm_client(response_body: dict) -> Client:
+    """Return a Client whose transport always returns response_body and whose token is valid."""
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json=response_body))
+    c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
+    c._client = httpx.Client(transport=transport)
+    patch.object(c._jwt_verifier, "verify_sync", return_value={"sub": "u1"}).start()
+    return c
+
+
+# --- chat ---
+
+def test_chat_invalid_dict_payload_raises_validation_error(mock_client: Client) -> None:
+    # Arrange: token passes, payload missing required fields
+    with patch.object(mock_client._jwt_verifier, "verify_sync", return_value={"sub": "u1"}):
+        # Act & Assert
+        with pytest.raises(ValidationError):
+            mock_client.chat("valid.jwt.token", {"bad_field": "value"})
+
+
+def test_chat_with_valid_nim_model_returns_normal_model() -> None:
+    # Arrange
+    c = _make_vlm_client(NORMAL_COMPLETED_RESPONSE)
+    nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
+
+    # Act
+    result = c.chat("valid.jwt.token", nim)
+
+    # Assert
+    assert isinstance(result, ResponseNormalModel)
+    assert result.status == "completed"
+    assert result.chat_id == "id-001"
+
+
+@pytest.mark.parametrize("response_body,expected_status", [
+    (NORMAL_PENDING_RESPONSE,   "pending"),
+    (NORMAL_RUNNING_RESPONSE,   "running"),
+    (NORMAL_COMPLETED_RESPONSE, "completed"),
+], ids=["pending", "running", "completed"])
+def test_chat_returns_normal_model_for_non_error_statuses(
+    response_body: dict, expected_status: str
+) -> None:
+    # Arrange
+    c = _make_vlm_client(response_body)
+
+    # Act
+    result = c.chat("valid.jwt.token", VALID_NIM_PAYLOAD)
+
+    # Assert
+    assert isinstance(result, ResponseNormalModel)
+    assert result.status == expected_status
+
+
+@pytest.mark.parametrize("response_body,expected_status", [
+    (ERROR_FAILED_RESPONSE,  "failed"),
+    (ERROR_TIMEOUT_RESPONSE, "timeout"),
+], ids=["failed", "timeout"])
+def test_chat_returns_error_model_for_error_statuses(
+    response_body: dict, expected_status: str
+) -> None:
+    # Arrange
+    c = _make_vlm_client(response_body)
+
+    # Act
+    result = c.chat("valid.jwt.token", VALID_NIM_PAYLOAD)
+
+    # Assert
+    assert isinstance(result, ResponseErrorModel)
+    assert result.status == expected_status
+
+
+# --- get_chat ---
+
+@pytest.mark.parametrize("response_body,expected_status", [
+    (NORMAL_PENDING_RESPONSE,   "pending"),
+    (NORMAL_RUNNING_RESPONSE,   "running"),
+    (NORMAL_COMPLETED_RESPONSE, "completed"),
+], ids=["pending", "running", "completed"])
+def test_get_chat_returns_normal_model_for_non_error_statuses(
+    response_body: dict, expected_status: str
+) -> None:
+    # Arrange
+    c = _make_vlm_client(response_body)
+
+    # Act
+    result = c.get_chat("valid.jwt.token", "id-001")
+
+    # Assert
+    assert isinstance(result, ResponseNormalModel)
+    assert result.status == expected_status
+    assert result.chat_id == "id-001"
+
+
+@pytest.mark.parametrize("response_body,expected_status", [
+    (ERROR_FAILED_RESPONSE,  "failed"),
+    (ERROR_TIMEOUT_RESPONSE, "timeout"),
+], ids=["failed", "timeout"])
+def test_get_chat_returns_error_model_for_error_statuses(
+    response_body: dict, expected_status: str
+) -> None:
+    # Arrange
+    c = _make_vlm_client(response_body)
+
+    # Act
+    result = c.get_chat("valid.jwt.token", "id-001")
+
+    # Assert
+    assert isinstance(result, ResponseErrorModel)
+    assert result.status == expected_status
+    assert result.error is not None
+
+
