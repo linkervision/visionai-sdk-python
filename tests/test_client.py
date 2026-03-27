@@ -263,8 +263,9 @@ def test_is_token_valid_returns_true_on_valid_token(mock_client: Client) -> None
         (jwt.InvalidSignatureError("Signature verification failed"), "InvalidSignatureError"),
         (jwt.DecodeError("Not enough segments"), "DecodeError"),
         (jwt.MissingRequiredClaimError("iss"), "MissingRequiredClaimError"),
+        (jwt.InvalidIssuerError("Token issuer 'https://evil.com/' is not in the allowed issuers list"), "InvalidIssuerError"),
     ],
-    ids=["expired", "invalid_signature", "malformed", "missing_iss"],
+    ids=["expired", "invalid_signature", "malformed", "missing_iss", "invalid_issuer"],
 )
 def test_is_token_valid_logs_warning_on_invalid_token(
     mock_client: Client, exc: jwt.InvalidTokenError, exc_name: str, caplog

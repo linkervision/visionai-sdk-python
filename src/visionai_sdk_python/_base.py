@@ -21,6 +21,7 @@ class _BaseClient:
         self,
         auth_url: str,
         vlm_url: str,
+        allowed_issuers: list[str] | None = None,
         verify_ssl: bool = True,
         timeout: float = 10.0,
         max_connections: int = 100,
@@ -31,6 +32,9 @@ class _BaseClient:
         Args:
             auth_url: Base URL for the authentication service.
             vlm_url: Base URL for the VLM inference service.
+            allowed_issuers: Optional list of allowed JWT issuers. If provided, tokens
+                whose ``iss`` claim is not in this list will be rejected. If omitted,
+                issuer validation is skipped.
             verify_ssl: Whether to verify TLS certificates.
             timeout: Default request timeout in seconds.
             max_connections: Maximum number of concurrent connections in the pool.
@@ -46,7 +50,12 @@ class _BaseClient:
         self.timeout = timeout
         self.max_connections = max_connections
         self.max_keepalive_connections = max_keepalive_connections
-        self._jwt_verifier = JwtVerifier(verify_ssl=verify_ssl, timeout=timeout)
+        self._jwt_verifier = JwtVerifier(
+            auth_url=self.auth_url,
+            allowed_issuers=allowed_issuers,
+            verify_ssl=verify_ssl,
+            timeout=timeout,
+        )
 
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:

@@ -1,4 +1,5 @@
 import asyncio
+import ssl
 import time
 
 import httpx
@@ -21,7 +22,15 @@ class JwtVerifier:
     - ``_jwks_clients``: jwks_uri → PyJWKClient (key-level caching delegated to PyJWKClient).
     """
 
-    def __init__(self, verify_ssl: bool = True, timeout: float = 10.0) -> None:
+    def __init__(
+        self,
+        auth_url: str,
+        allowed_issuers: list[str] | None = None,
+        verify_ssl: bool = True,
+        timeout: float = 10.0,
+    ) -> None:
+        self._auth_url = auth_url
+        self._allowed_issuers: frozenset[str] = frozenset(allowed_issuers) if allowed_issuers else frozenset()
         self._verify_ssl = verify_ssl
         self._timeout = timeout
         # issuer -> (jwks_uri, expire_at)
@@ -46,12 +55,25 @@ class JwtVerifier:
     def _cache_jwks_uri(self, issuer: str, jwks_uri: str) -> None:
         self._jwks_uri_cache[issuer] = (jwks_uri, time.monotonic() + _JWKS_URI_TTL)
 
+    def _validate_issuer(self, issuer: str) -> None:
+        """Validate issuer is in the allowed issuers list.
+
+        Raises:
+            jwt.InvalidIssuerError: If allowed_issuers is set and issuer is not in the list.
+        """
+        if self._allowed_issuers and issuer not in self._allowed_issuers:
+            raise jwt.InvalidIssuerError(
+                f"Token issuer '{issuer}' is not in the allowed issuers list"
+            )
+
     def _get_jwks_client(self, jwks_uri: str) -> PyJWKClient:
         if jwks_uri not in self._jwks_clients:
+            ssl_context = None if self._verify_ssl else ssl._create_unverified_context()
             self._jwks_clients[jwks_uri] = PyJWKClient(
                 jwks_uri,
                 cache_keys=True,
-                timeout=int(self._timeout),
+                timeout=self._timeout,
+                ssl_context=ssl_context,
             )
         return self._jwks_clients[jwks_uri]
 
@@ -128,8 +150,10 @@ class JwtVerifier:
             jwt.InvalidSignatureError: Signature does not match.
             jwt.DecodeError: Token is malformed.
             jwt.MissingRequiredClaimError: Token is missing the ``iss`` claim.
+            jwt.InvalidIssuerError: Token issuer is not in the allowed issuers list.
         """
         issuer = self._get_issuer(access_token)
+        self._validate_issuer(issuer)
         jwks_uri = self._fetch_jwks_uri_sync(issuer)
         signing_key = self._get_jwks_client(jwks_uri).get_signing_key_from_jwt(access_token)
         return self._decode_verified(access_token, signing_key.key)
@@ -142,8 +166,10 @@ class JwtVerifier:
             jwt.InvalidSignatureError: Signature does not match.
             jwt.DecodeError: Token is malformed.
             jwt.MissingRequiredClaimError: Token is missing the ``iss`` claim.
+            jwt.InvalidIssuerError: Token issuer is not in the allowed issuers list.
         """
         issuer = self._get_issuer(access_token)
+        self._validate_issuer(issuer)
         jwks_uri = await self._fetch_jwks_uri_async(issuer)
         # PyJWKClient.get_signing_key_from_jwt does blocking HTTP; offload to thread pool
         signing_key = await asyncio.to_thread(
