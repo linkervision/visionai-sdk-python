@@ -34,3 +34,7 @@ class ServerError(APIError):
 
 class NetworkError(VisionaiSDKError):
     """Connection or timeout failure."""
+
+
+class JwksDiscoveryError(VisionaiSDKError):
+    """Failed to fetch or parse the OIDC discovery document or JWKS endpoint."""

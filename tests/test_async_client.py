@@ -4,7 +4,7 @@ import jwt
 from unittest.mock import patch
 
 from visionai_sdk_python.async_client import AsyncClient
-from visionai_sdk_python.exceptions import APIError, AuthenticationError, NetworkError, ServerError
+from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
 from visionai_sdk_python.models import TokenResponse
 
 AUTH_URL = "https://auth.example.com"
@@ -338,6 +338,28 @@ async def test_is_token_valid_logs_error_on_jwks_failure(
     assert log_record.levelname == "ERROR"
     assert "JWKS client error during token validation" in log_record.message
     assert log_record.jwt_error_type == "PyJWKClientError"
+    assert log_record.jwt_error_message == str(exc)
+
+
+@pytest.mark.asyncio
+async def test_is_token_valid_logs_error_on_jwks_discovery_failure(
+    mock_client: AsyncClient, caplog
+) -> None:
+    # Arrange
+    from visionai_sdk_python import async_client
+    exc = JwksDiscoveryError("Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known")
+    with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
+        # Act
+        with caplog.at_level("ERROR", logger=async_client.__name__):
+            result = await mock_client.is_token_valid("any.jwt.token")
+
+    # Assert
+    assert result is False
+    assert len(caplog.records) == 1
+
+    log_record = caplog.records[0]
+    assert "OIDC discovery failed during token validation" in log_record.message
+    assert log_record.jwt_error_type == "JwksDiscoveryError"
     assert log_record.jwt_error_message == str(exc)
 
 

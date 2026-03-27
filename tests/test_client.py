@@ -4,7 +4,7 @@ import jwt
 from unittest.mock import patch
 
 from visionai_sdk_python.client import Client
-from visionai_sdk_python.exceptions import APIError, AuthenticationError, NetworkError, ServerError
+from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
 from visionai_sdk_python.models import TokenResponse
 
 AUTH_URL = "https://auth.example.com"
@@ -110,8 +110,7 @@ def test_login_network_error(connect_error_transport: httpx.MockTransport) -> No
         c.login("user@example.com", "password")
 
 
-@pytest.mark.asyncio
-async def test_login_api_error(api_error_transport):
+def test_login_api_error(api_error_transport):
     # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=api_error_transport)
@@ -199,8 +198,7 @@ def test_get_access_token_network_error(connect_error_transport: httpx.MockTrans
         c.get_access_token("admin", "secret")
 
 
-@pytest.mark.asyncio
-async def test_get_access_token_api_error(api_error_transport):
+def test_get_access_token_api_error(api_error_transport):
     # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=api_error_transport)
@@ -308,6 +306,27 @@ def test_is_token_valid_logs_error_on_jwks_failure(
     assert log_record.levelname == "ERROR"
     assert "JWKS client error during token validation" in log_record.message
     assert log_record.jwt_error_type == "PyJWKClientError"
+    assert log_record.jwt_error_message == str(exc)
+
+
+def test_is_token_valid_logs_error_on_jwks_discovery_failure(
+    mock_client: Client, caplog
+) -> None:
+    # Arrange
+    from visionai_sdk_python import client
+    exc = JwksDiscoveryError("Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known")
+    with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
+        # Act
+        with caplog.at_level("ERROR", logger=client.__name__):
+            result = mock_client.is_token_valid("any.jwt.token")
+
+    # Assert
+    assert result is False
+    assert len(caplog.records) == 1
+
+    log_record = caplog.records[0]
+    assert "OIDC discovery failed during token validation" in log_record.message
+    assert log_record.jwt_error_type == "JwksDiscoveryError"
     assert log_record.jwt_error_message == str(exc)
 
 

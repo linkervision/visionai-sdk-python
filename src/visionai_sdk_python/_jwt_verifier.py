@@ -6,6 +6,8 @@ import httpx
 import jwt
 from jwt import PyJWKClient
 
+from .exceptions import JwksDiscoveryError
+
 _OIDC_DISCOVERY_PATH = "/.well-known/openid-configuration"
 _JWKS_URI_TTL: float = 3600.0  # seconds; refresh OIDC discovery cache after 1 hour
 # Supported asymmetric signing algorithms:
@@ -13,6 +15,12 @@ _JWKS_URI_TTL: float = 3600.0  # seconds; refresh OIDC discovery cache after 1 h
 # - ES256/384/512: ECDSA signature with SHA-256/384/512
 _ALLOWED_ALGORITHMS: list[str] = ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"]
 
+
+def _get_insecure_context() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 class JwtVerifier:
     """Stateful JWT verifier that handles OIDC discovery and JWKS key fetching.
@@ -68,7 +76,7 @@ class JwtVerifier:
 
     def _get_jwks_client(self, jwks_uri: str) -> PyJWKClient:
         if jwks_uri not in self._jwks_clients:
-            ssl_context = None if self._verify_ssl else ssl._create_unverified_context()
+            ssl_context = None if self._verify_ssl else _get_insecure_context()
             self._jwks_clients[jwks_uri] = PyJWKClient(
                 jwks_uri,
                 cache_keys=True,
@@ -109,31 +117,51 @@ class JwtVerifier:
     # ------------------------------------------------------------------
 
     def _fetch_jwks_uri_sync(self, issuer: str) -> str:
-        """Resolve jwks_uri from the OIDC discovery document (blocking)."""
+        """Resolve jwks_uri from the OIDC discovery document (blocking).
+
+        Raises:
+            JwksDiscoveryError: If the discovery endpoint is unreachable, returns a
+                non-2xx status, or the response does not contain ``jwks_uri``.
+        """
         cached = self._get_cached_jwks_uri(issuer)
         if cached is not None:
             return cached
 
         discovery_url = f"{issuer.rstrip('/')}{_OIDC_DISCOVERY_PATH}"
-        with httpx.Client(verify=self._verify_ssl, timeout=self._timeout) as http:
-            resp = http.get(discovery_url)
-            resp.raise_for_status()
-            jwks_uri: str = resp.json()["jwks_uri"]
+        try:
+            with httpx.Client(verify=self._verify_ssl, timeout=self._timeout) as http:
+                resp = http.get(discovery_url)
+                resp.raise_for_status()
+                jwks_uri: str = resp.json()["jwks_uri"]
+        except (httpx.RequestError, httpx.HTTPStatusError, KeyError) as e:
+            raise JwksDiscoveryError(
+                f"Failed to fetch OIDC discovery document from '{discovery_url}': {e}"
+            ) from e
 
         self._cache_jwks_uri(issuer, jwks_uri)
         return jwks_uri
 
     async def _fetch_jwks_uri_async(self, issuer: str) -> str:
-        """Resolve jwks_uri from the OIDC discovery document (non-blocking)."""
+        """Resolve jwks_uri from the OIDC discovery document (non-blocking).
+
+        Raises:
+            JwksDiscoveryError: If the discovery endpoint is unreachable, returns a
+                non-2xx status, or the response does not contain ``jwks_uri``.
+        """
         cached = self._get_cached_jwks_uri(issuer)
         if cached is not None:
             return cached
 
         discovery_url = f"{issuer.rstrip('/')}{_OIDC_DISCOVERY_PATH}"
-        async with httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout) as http:
-            resp = await http.get(discovery_url)
-            resp.raise_for_status()
-            jwks_uri: str = resp.json()["jwks_uri"]
+        try:
+            async with httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout) as http:
+                resp = await http.get(discovery_url)
+                resp.raise_for_status()
+                jwks_uri: str = resp.json()["jwks_uri"]
+        except (httpx.RequestError, httpx.HTTPStatusError, KeyError) as e:
+            raise JwksDiscoveryError(
+                f"Failed to fetch OIDC discovery document from '{discovery_url}': {e}"
+            ) from e
 
         self._cache_jwks_uri(issuer, jwks_uri)
         return jwks_uri
