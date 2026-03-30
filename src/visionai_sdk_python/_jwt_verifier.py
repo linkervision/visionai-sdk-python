@@ -69,9 +69,10 @@ class JwtVerifier:
         Raises:
             jwt.InvalidIssuerError: If allowed_issuers is set and issuer is not in the list.
         """
-        if self._allowed_issuers and issuer not in self._allowed_issuers:
+        normalized = issuer.rstrip("/")
+        if self._allowed_issuers and normalized not in self._allowed_issuers:
             raise jwt.InvalidIssuerError(
-                f"Token issuer '{issuer}' is not in the allowed issuers list"
+                f"Token issuer '{normalized}' is not in the allowed issuers list"
             )
 
     def _get_jwks_client(self, jwks_uri: str) -> PyJWKClient:

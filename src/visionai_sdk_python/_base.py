@@ -8,6 +8,7 @@ from .exceptions import (
     ServerError,
 )
 from ._jwt_verifier import JwtVerifier
+from .constants import resolve_allowed_issuers
 
 
 class _BaseClient:
@@ -50,9 +51,10 @@ class _BaseClient:
         self.timeout = timeout
         self.max_connections = max_connections
         self.max_keepalive_connections = max_keepalive_connections
+        resolved_issuers: list[str] = allowed_issuers if allowed_issuers is not None else resolve_allowed_issuers(self.auth_url)
         self._jwt_verifier = JwtVerifier(
             auth_url=self.auth_url,
-            allowed_issuers=allowed_issuers,
+            allowed_issuers=resolved_issuers,
             verify_ssl=verify_ssl,
             timeout=timeout,
         )

@@ -59,7 +59,7 @@ def test_auth_header_raises_on_empty_token() -> None:
 
 _ALLOWED_ISSUERS = [
     "https://offline.visionai.linkervision.com/keycloak/realms/linker-platform",
-    "https://data-engine-staging.jp.auth0.com/",
+    "https://data-engine-staging.jp.auth0.com",
 ]
 
 
@@ -91,9 +91,10 @@ def test_validate_issuer_raises_for_unknown(issuer: str) -> None:
         client._jwt_verifier._validate_issuer(issuer)
 
 
-def test_validate_issuer_skipped_when_no_allowed_issuers() -> None:
+def test_validate_issuer_raises_for_unknown_when_no_allowed_issuers() -> None:
     client = _BaseClient(
         auth_url="https://auth.example.com",
         vlm_url="https://vlm.example.com",
     )
-    client._jwt_verifier._validate_issuer("https://anyone.com/")  # should not raise
+    with pytest.raises(jwt.InvalidIssuerError):
+        client._jwt_verifier._validate_issuer("https://anyone.com/")  # should not raise
