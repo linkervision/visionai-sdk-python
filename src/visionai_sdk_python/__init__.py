@@ -8,6 +8,7 @@ from .client import Client
 from .exceptions import (
     AuthenticationError,
     ClientError,
+    JwksDiscoveryError,
     NetworkError,
     PermissionDeniedError,
     ServerError,
@@ -25,4 +26,5 @@ __all__ = [
     "ClientError",
     "ServerError",
     "NetworkError",
+    "JwksDiscoveryError",
 ]

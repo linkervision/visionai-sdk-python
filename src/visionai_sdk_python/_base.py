@@ -7,6 +7,8 @@ from .exceptions import (
     PermissionDeniedError,
     ServerError,
 )
+from ._jwt_verifier import JwtVerifier
+from .constants import resolve_allowed_issuers
 
 
 class _BaseClient:
@@ -20,6 +22,7 @@ class _BaseClient:
         self,
         auth_url: str,
         vlm_url: str,
+        allowed_issuers: list[str] | None = None,
         verify_ssl: bool = True,
         timeout: float = 10.0,
         max_connections: int = 100,
@@ -30,6 +33,9 @@ class _BaseClient:
         Args:
             auth_url: Base URL for the authentication service.
             vlm_url: Base URL for the VLM inference service.
+            allowed_issuers: Optional list of allowed JWT issuers. If provided, tokens
+                whose ``iss`` claim is not in this list will be rejected. If omitted,
+                issuer validation is skipped.
             verify_ssl: Whether to verify TLS certificates.
             timeout: Default request timeout in seconds.
             max_connections: Maximum number of concurrent connections in the pool.
@@ -45,13 +51,18 @@ class _BaseClient:
         self.timeout = timeout
         self.max_connections = max_connections
         self.max_keepalive_connections = max_keepalive_connections
-
+        resolved_issuers: list[str] = allowed_issuers if allowed_issuers is not None else resolve_allowed_issuers(self.auth_url)
+        self._jwt_verifier = JwtVerifier(
+            auth_url=self.auth_url,
+            allowed_issuers=resolved_issuers,
+            verify_ssl=verify_ssl,
+            timeout=timeout,
+        )
 
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
-
 
     @staticmethod
     def _build_auth_header(access_token: str) -> dict[str, str]:

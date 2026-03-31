@@ -1,8 +1,10 @@
 import pytest
 import httpx
+import jwt
+from unittest.mock import patch
 
 from visionai_sdk_python.async_client import AsyncClient
-from visionai_sdk_python.exceptions import APIError, AuthenticationError, NetworkError, ServerError
+from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
 from visionai_sdk_python.models import TokenResponse
 
 AUTH_URL = "https://auth.example.com"
@@ -268,6 +270,109 @@ async def test_get_access_token_whitespace_client_secret(mock_client: AsyncClien
     # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
         await mock_client.get_access_token("client-id", "   ")
+
+
+# --- is_token_valid ---
+@pytest.mark.asyncio
+async def test_is_token_valid_returns_true_on_valid_token(mock_client: AsyncClient) -> None:
+    # Arrange
+    claims = {"sub": "user-123", "iss": "https://auth.example.com"}
+    with patch.object(mock_client._jwt_verifier, "verify_async", return_value=claims):
+        # Act
+        result = await mock_client.is_token_valid("any.jwt.token")
+
+    # Assert
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "exc,exc_name",
+    [
+        (jwt.ExpiredSignatureError("Token has expired"), "ExpiredSignatureError"),
+        (jwt.InvalidSignatureError("Signature verification failed"), "InvalidSignatureError"),
+        (jwt.DecodeError("Not enough segments"), "DecodeError"),
+        (jwt.MissingRequiredClaimError("iss"), "MissingRequiredClaimError"),
+        (jwt.InvalidIssuerError("Token issuer 'https://evil.com/' is not in the allowed issuers list"), "InvalidIssuerError"),
+    ],
+    ids=["expired", "invalid_signature", "malformed", "missing_iss", "invalid_issuer"],
+)
+async def test_is_token_valid_logs_warning_on_invalid_token(
+    mock_client: AsyncClient, exc: jwt.InvalidTokenError, exc_name: str, caplog
+) -> None:
+    # Arrange
+    from visionai_sdk_python import async_client
+    with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
+        # Act
+        with caplog.at_level("WARNING", logger=async_client.__name__):
+            result = await mock_client.is_token_valid("any.jwt.token")
+
+    # Assert
+    assert result is False
+    assert len(caplog.records) == 1
+
+    log_record = caplog.records[0]
+    assert log_record.levelname == "WARNING"
+    assert "Token validation failed" in log_record.message
+    assert exc_name in log_record.message
+    assert log_record.jwt_error_type == exc_name
+    assert log_record.jwt_error_message == str(exc)
+
+
+@pytest.mark.asyncio
+async def test_is_token_valid_logs_error_on_jwks_failure(
+    mock_client: AsyncClient, caplog
+) -> None:
+    # Arrange
+    from visionai_sdk_python import async_client
+    exc = jwt.PyJWKClientError("Failed to fetch JWKS from endpoint")
+    with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
+        # Act
+        with caplog.at_level("ERROR", logger=async_client.__name__):
+            result = await mock_client.is_token_valid("any.jwt.token")
+
+    # Assert
+    assert result is False
+    assert len(caplog.records) == 1
+
+    log_record = caplog.records[0]
+    assert log_record.levelname == "ERROR"
+    assert "JWKS client error during token validation" in log_record.message
+    assert log_record.jwt_error_type == "PyJWKClientError"
+    assert log_record.jwt_error_message == str(exc)
+
+
+@pytest.mark.asyncio
+async def test_is_token_valid_logs_error_on_jwks_discovery_failure(
+    mock_client: AsyncClient, caplog
+) -> None:
+    # Arrange
+    from visionai_sdk_python import async_client
+    exc = JwksDiscoveryError("Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known")
+    with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
+        # Act
+        with caplog.at_level("ERROR", logger=async_client.__name__):
+            result = await mock_client.is_token_valid("any.jwt.token")
+
+    # Assert
+    assert result is False
+    assert len(caplog.records) == 1
+
+    log_record = caplog.records[0]
+    assert "OIDC discovery failed during token validation" in log_record.message
+    assert log_record.jwt_error_type == "JwksDiscoveryError"
+    assert log_record.jwt_error_message == str(exc)
+
+
+@pytest.mark.asyncio
+async def test_is_token_valid_propagates_unexpected_errors(
+    mock_client: AsyncClient
+) -> None:
+    # Arrange - Simulate a programming error (e.g., AttributeError)
+    exc = AttributeError("'NoneType' object has no attribute 'verify'")
+    with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
+        # Act & Assert - Unexpected exceptions should propagate
+        with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'verify'"):
+            await mock_client.is_token_valid("any.jwt.token")
 
 
 # --- Resource cleanup ---
