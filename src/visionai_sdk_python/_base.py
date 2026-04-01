@@ -1,4 +1,6 @@
+import time
 import httpx
+from typing import Literal
 
 from .exceptions import (
     APIError,
@@ -59,6 +61,12 @@ class _BaseClient:
             timeout=timeout,
         )
 
+        # Token management state
+        self._access_token: str | None = None
+        self._token_expires_at: float | None = None  # monotonic time
+        self._credentials: dict | None = None
+        self._credentials_type: Literal["login", "client"] | None = None
+
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
@@ -71,6 +79,60 @@ class _BaseClient:
             raise ValueError("access_token must not be empty")
         return {"Authorization": f"Bearer {access_token}"}
 
+
+    def _store_token(
+        self,
+        access_token: str,
+        expires_in: int,
+        credentials: dict | None = None,
+        credentials_type: Literal["login", "client"] | None = None,
+    ) -> None:
+        """Store token and credentials for auto-refresh.
+
+        Args:
+            access_token: JWT access token.
+            expires_in: Token expiration time in seconds.
+            credentials: Optional credentials for auto-refresh.
+            credentials_type: Type of credentials ("login" or "client").
+        """
+        self._access_token = access_token
+        self._token_expires_at = time.monotonic() + expires_in
+        self._credentials = credentials
+        self._credentials_type = credentials_type
+
+    def _is_token_expiring_soon(self, buffer_seconds: int = 30) -> bool:
+        """Check if token is expiring soon.
+
+        Args:
+            buffer_seconds: Time buffer in seconds before actual expiration.
+
+        Returns:
+            True if token is expiring within buffer_seconds, False otherwise.
+        """
+        if self._token_expires_at is None:
+            return True
+        return time.monotonic() >= (self._token_expires_at - buffer_seconds)
+
+    def set_token(self, access_token: str, expires_in: int | None = None) -> None:
+        """Set externally obtained token.
+
+        Use this when you have an access token obtained through other means
+        (e.g., frontend authorization code flow). Note that tokens set this way
+        cannot be auto-refreshed since no credentials are stored.
+
+        Args:
+            access_token: JWT access token.
+            expires_in: Token expiration time in seconds. If None, defaults to 3600 (1 hour).
+
+        Example:
+            >>> client = Client(auth_url="...", vlm_url="...")
+            >>> client.set_token("eyJhbG...", expires_in=3600)
+            >>> result = client.chat(payload)  # Token will be used automatically
+        """
+        if not access_token.strip():
+            raise ValueError("access_token must not be empty")
+        expires = expires_in if expires_in is not None else 3600
+        self._store_token(access_token, expires, credentials=None, credentials_type=None)
 
     @staticmethod
     def _handle_response(response: httpx.Response) -> httpx.Response:
