@@ -3,8 +3,9 @@ import httpx
 import jwt
 
 from ._base import _BaseClient
-from .exceptions import JwksDiscoveryError, NetworkError, VisionaiSDKError
-from .models import TokenResponse
+from .endpoints import AuthEndpoint, VLMEndpoint
+from .exceptions import AuthenticationError, JwksDiscoveryError, NetworkError, VisionaiSDKError
+from .models import TokenResponse, NIMRequestModel, ResponseNormalModel, ResponseErrorModel
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,18 @@ class Client(_BaseClient):
         )
 
 
+    def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Execute an HTTP request, mapping httpx exceptions to SDK exceptions."""
+        try:
+            response = self._client.request(method, url, **kwargs)
+        except httpx.TimeoutException as e:
+            raise NetworkError("Request timed out") from e
+        except httpx.NetworkError as e:
+            raise NetworkError(f"Network error: {e}") from e
+        except httpx.RequestError as e:
+            raise VisionaiSDKError(f"Request failed: {e}") from e
+        return self._handle_response(response)
+
     def close(self) -> None:
         """Close the HTTP client and release connections."""
         self._client.close()
@@ -57,6 +70,9 @@ class Client(_BaseClient):
     def get_access_token(self, client_id: str, client_secret: str) -> TokenResponse:
         """Get access token using client credentials flow.
 
+        The token is stored internally and will be used automatically for subsequent
+        API calls. If the token expires, it will be automatically refreshed.
+
         Args:
             client_id: OAuth client ID
             client_secret: OAuth client secret
@@ -74,26 +90,29 @@ class Client(_BaseClient):
         if not client_secret.strip():
             raise ValueError("client_secret must not be empty")
 
-        try:
-            response = self._client.post(
-                self._build_url(self.auth_url, "/api/users/client-token"),
-                json={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                },
-            )
-        except httpx.TimeoutException as e:
-            raise NetworkError("Request timed out") from e
-        except httpx.NetworkError as e:
-            raise NetworkError(f"Network error: {e}") from e
-        except httpx.RequestError as e:
-            raise VisionaiSDKError(f"Request failed: {e}") from e
-        self._handle_response(response)
-        return TokenResponse(**response.json())
+        response = self._request(
+            "POST",
+            self._build_url(self.auth_url, AuthEndpoint.CLIENT_TOKEN),
+            json={"client_id": client_id, "client_secret": client_secret},
+        )
+        token_response = TokenResponse(**response.json())
+
+        # Store token and credentials for auto-refresh
+        self._store_token(
+            access_token=token_response.access_token,
+            expires_in=token_response.expires_in,
+            credentials={"client_id": client_id, "client_secret": client_secret},
+            credentials_type="client",
+        )
+
+        return token_response
 
 
     def login(self, email: str, password: str) -> TokenResponse:
         """Login with email and password to get JWT token.
+
+        The token is stored internally and will be used automatically for subsequent
+        API calls. If the token expires, it will be automatically refreshed.
 
         Args:
             email: User email address
@@ -112,22 +131,56 @@ class Client(_BaseClient):
         if not password.strip():
             raise ValueError("password must not be empty")
 
-        try:
-            response = self._client.post(
-                self._build_url(self.auth_url, "/api/users/jwt"),
-                json={
-                    "email": email,
-                    "password": password,
-                },
+        response = self._request(
+            "POST",
+            self._build_url(self.auth_url, AuthEndpoint.LOGIN),
+            json={"email": email, "password": password},
+        )
+        token_response = TokenResponse(**response.json())
+
+        # Store token and credentials for auto-refresh
+        self._store_token(
+            access_token=token_response.access_token,
+            expires_in=token_response.expires_in,
+            credentials={"email": email, "password": password},
+            credentials_type="login",
+        )
+
+        return token_response
+
+    def _refresh_token(self) -> None:
+        """Refresh token using stored credentials.
+
+        Raises:
+            AuthenticationError: If no credentials are stored or refresh fails.
+        """
+        if self._credentials is None or self._credentials_type is None:
+            raise AuthenticationError("No credentials available for token refresh")
+
+        if self._credentials_type == "login":
+            self.login(
+                email=self._credentials["email"],
+                password=self._credentials["password"],
             )
-        except httpx.TimeoutException as e:
-            raise NetworkError("Request timed out") from e
-        except httpx.NetworkError as e:
-            raise NetworkError(f"Network error: {e}") from e
-        except httpx.RequestError as e:
-            raise VisionaiSDKError(f"Request failed: {e}") from e
-        self._handle_response(response)
-        return TokenResponse(**response.json())
+        elif self._credentials_type == "client":
+            self.get_access_token(
+                client_id=self._credentials["client_id"],
+                client_secret=self._credentials["client_secret"],
+            )
+
+    def _ensure_token(self) -> None:
+        """Ensure a valid token is available, refreshing if necessary.
+
+        Raises:
+            AuthenticationError: If no token is available or token expired without credentials.
+        """
+        if self._access_token is None:
+            raise AuthenticationError("Not authenticated. Call login() or get_access_token() first.")
+
+        if self._is_token_expiring_soon():
+            if self._credentials is None:
+                raise AuthenticationError("Token expired and no credentials available for refresh")
+            self._refresh_token()
 
     def is_token_valid(self, access_token: str) -> bool:
         """Check whether a JWT access token is currently valid.
@@ -173,3 +226,75 @@ class Client(_BaseClient):
             )
             return False
         
+    
+    def chat(
+            self,
+            payload: NIMRequestModel | dict,
+        ) -> ResponseNormalModel | ResponseErrorModel:
+        """Submit an inference request to the VLM service.
+
+        Uses the internally stored access token obtained from login() or get_access_token().
+        If the token is expiring soon, it will be automatically refreshed.
+
+        Args:
+            payload: Inference parameters as a NIMRequestModel instance or a dict
+                whose keys match NIMRequestModel fields (validated via model_validate).
+
+        Returns:
+            ResponseNormalModel if the request is accepted (status: pending/running/completed),
+            or ResponseErrorModel if the inference failed or timed out.
+
+        Raises:
+            ValidationError: If payload is a dict that fails NIMRequestModel validation.
+            AuthenticationError: If not authenticated or token expired without refresh credentials.
+            NetworkError: If the request times out or a network error occurs.
+            VisionaiSDKError: If the request fails for any other reason.
+        """
+        self._ensure_token()
+
+        nim_request = (
+            NIMRequestModel.model_validate(payload)
+            if isinstance(payload, dict)
+            else payload
+        )
+        response = self._request(
+            "POST",
+            self._build_url(self.vlm_url, VLMEndpoint.CHAT),
+            headers=self._build_auth_header(self._access_token),
+            json=nim_request.model_dump(mode="json"),
+        )
+        data = response.json()
+        if data.get("status") in ("failed", "timeout"):
+            return ResponseErrorModel(**data)
+        return ResponseNormalModel(**data)
+
+
+    def get_chat(self, result_id: str) -> ResponseNormalModel | ResponseErrorModel:
+        """Poll the result of a previously submitted inference request.
+
+        Uses the internally stored access token obtained from login() or get_access_token().
+        If the token is expiring soon, it will be automatically refreshed.
+
+        Args:
+            result_id: Chat result ID returned from a prior chat() call.
+
+        Returns:
+            ResponseNormalModel if the result is available (status: pending/running/completed),
+            or ResponseErrorModel if the inference failed or timed out.
+
+        Raises:
+            AuthenticationError: If not authenticated or token expired without refresh credentials.
+            NetworkError: If the request times out or a network error occurs.
+            VisionaiSDKError: If the request fails for any other reason.
+        """
+        self._ensure_token()
+
+        response = self._request(
+            "GET",
+            self._build_url(self.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"),
+            headers=self._build_auth_header(self._access_token),
+        )
+        data = response.json()
+        if data.get("status") in ("failed", "timeout"):
+            return ResponseErrorModel(**data)
+        return ResponseNormalModel(**data)
