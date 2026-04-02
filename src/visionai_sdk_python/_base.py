@@ -120,19 +120,51 @@ class _BaseClient:
         (e.g., frontend authorization code flow). Note that tokens set this way
         cannot be auto-refreshed since no credentials are stored.
 
+        The token will be validated locally to ensure it has a valid signature
+        and has not expired. The actual expiration time from the token's ``exp``
+        claim will be used. If ``expires_in`` is provided, the minimum of the two
+        will be used to prevent extending the token's lifetime beyond its true expiration.
+
         Args:
             access_token: JWT access token.
-            expires_in: Token expiration time in seconds. If None, defaults to 3600 (1 hour).
+            expires_in: Optional token expiration time in seconds. If provided,
+                the effective expiration will be min(expires_in, token's actual remaining time).
+                If None, the token's actual ``exp`` claim will be used.
+
+        Raises:
+            ValueError: If access_token is empty.
+            jwt.ExpiredSignatureError: If token has already expired.
+            jwt.InvalidSignatureError: If token signature is invalid.
+            jwt.DecodeError: If token is malformed.
+            jwt.MissingRequiredClaimError: If token is missing required claims.
+            jwt.InvalidIssuerError: If token issuer is not allowed.
 
         Example:
             >>> client = Client(auth_url="...", vlm_url="...")
-            >>> client.set_token("eyJhbG...", expires_in=3600)
+            >>> client.set_token("eyJhbG...")
             >>> result = client.chat(payload)  # Token will be used automatically
         """
         if not access_token.strip():
             raise ValueError("access_token must not be empty")
-        expires = expires_in if expires_in is not None else 3600
-        self._store_token(access_token, expires, credentials=None, credentials_type=None)
+
+        # Validate token and extract exp claim
+        claims = self._jwt_verifier.verify_sync(access_token)
+        jwt_exp = claims.get("exp")
+        if jwt_exp is None:
+            raise ValueError("Token missing 'exp' claim")
+
+        # Calculate remaining time from JWT exp
+        jwt_expires_in = int(jwt_exp - time.time())
+        if jwt_expires_in <= 0:
+            raise ValueError("Token has already expired")
+
+        # Use the minimum of provided expires_in and actual JWT expiration
+        if expires_in is not None:
+            effective_expires_in = min(expires_in, jwt_expires_in)
+        else:
+            effective_expires_in = jwt_expires_in
+
+        self._store_token(access_token, effective_expires_in, credentials=None, credentials_type=None)
 
     @staticmethod
     def _handle_response(response: httpx.Response) -> httpx.Response:
