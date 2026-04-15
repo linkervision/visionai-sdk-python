@@ -1,6 +1,6 @@
 [project]
 name = "visionai-sdk-python"
-version = "0.1.0"
+dynamic = ["version"]
 description = "VisionAI SDK for Python"
 readme = "README.md"
 authors = [
@@ -15,8 +15,10 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.9.18,<0.10.0"]
-build-backend = "uv_build"
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
 
 [dependency-groups]
 dev = [
