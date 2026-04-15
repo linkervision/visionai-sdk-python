@@ -35,7 +35,7 @@ token = client.login("user@example.com", "your-password")
 
 # Submit VLM inference request
 response = client.chat({
-    "img": "https://example.com/image.jpg",  # or ["url1", "url2"] for multiple images
+    "img": "examplebase64",
     "prompt": "Describe this image",
     "temperature": 0.7,
     "max_tokens": 500
@@ -72,7 +72,7 @@ async def main():
 
         # Submit inference
         response = await client.chat({
-            "img": "https://example.com/image.jpg",
+            "img": "examplebase64",
             "prompt": "What objects are in this image?",
             "temperature": 0.2
         })
@@ -122,7 +122,7 @@ from visionai_sdk_python.models import NIMRequestModel
 
 # Using dict
 response = client.chat({
-    "img": "https://example.com/image.jpg",
+    "img": "examplebase64",
     "prompt": "Analyze this image",
     "temperature": 0.7,
     "max_tokens": 1000,
@@ -131,7 +131,7 @@ response = client.chat({
 
 # Using typed model
 request = NIMRequestModel(
-    img=["https://example.com/img1.jpg", "https://example.com/img2.jpg"],
+    img=["examplebase64"],
     prompt="Compare these images",
     temperature=0.5,
     max_tokens=500
