@@ -7,7 +7,8 @@ from pydantic import ValidationError
 
 from visionai_sdk_python.client import Client
 from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
-from visionai_sdk_python.models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel, TokenResponse
+from visionai_sdk_python.auth.models import TokenResponse
+from visionai_sdk_python.vlm.models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel
 from tests.constants import (
     AUTH_URL, VLM_URL, TOKEN_PAYLOAD,
     VALID_NIM_PAYLOAD,
@@ -68,7 +69,7 @@ def test_login_success(mock_client: Client) -> None:
     # Arrange: mock_client fixture provides a client with successful transport
 
     # Act
-    result = mock_client.login("user@example.com", "correct-password")
+    result = mock_client.auth.login("user@example.com", "correct-password")
 
     # Assert
     assert isinstance(result, TokenResponse)
@@ -89,7 +90,7 @@ def test_login_wrong_credentials(unauthorized_transport: httpx.MockTransport) ->
 
     # Act & Assert
     with pytest.raises(AuthenticationError, match="Invalid credentials") as exc_info:
-        c.login("user@example.com", "wrong-password")
+        c.auth.login("user@example.com", "wrong-password")
     assert exc_info.value.status_code == 401
 
 
@@ -100,7 +101,7 @@ def test_login_server_error(server_error_transport: httpx.MockTransport) -> None
 
     # Act & Assert
     with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
-        c.login("user@example.com", "password")
+        c.auth.login("user@example.com", "password")
     assert exc_info.value.status_code == 503
 
 
@@ -111,7 +112,7 @@ def test_login_network_error(connect_error_transport: httpx.MockTransport) -> No
 
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error"):
-        c.login("user@example.com", "password")
+        c.auth.login("user@example.com", "password")
 
 
 def test_login_api_error(api_error_transport):
@@ -121,7 +122,7 @@ def test_login_api_error(api_error_transport):
 
     # Act & Assert
     with pytest.raises(APIError, match="Too many redirect") as exc_info:
-        c.login("user@example.com", "correct-password")
+        c.auth.login("user@example.com", "correct-password")
     assert exc_info.value.status_code == 310
 
 
@@ -130,7 +131,7 @@ def test_login_empty_email(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="email must not be empty"):
-        mock_client.login("", "password")
+        mock_client.auth.login("", "password")
 
 
 def test_login_empty_password(mock_client: Client) -> None:
@@ -138,7 +139,7 @@ def test_login_empty_password(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="password must not be empty"):
-        mock_client.login("user@example.com", "")
+        mock_client.auth.login("user@example.com", "")
 
 
 def test_login_whitespace_email(mock_client: Client) -> None:
@@ -146,7 +147,7 @@ def test_login_whitespace_email(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="email must not be empty"):
-        mock_client.login("   ", "password")
+        mock_client.auth.login("   ", "password")
 
 
 def test_login_whitespace_password(mock_client: Client) -> None:
@@ -154,7 +155,7 @@ def test_login_whitespace_password(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="password must not be empty"):
-        mock_client.login("user@example.com", "   ")
+        mock_client.auth.login("user@example.com", "   ")
 
 
 # --- get_access_token ---
@@ -163,7 +164,7 @@ def test_get_access_token_success(mock_client: Client) -> None:
     # Arrange: mock_client fixture provides a client with successful transport
 
     # Act
-    result = mock_client.get_access_token("admin", "secret")
+    result = mock_client.auth.get_access_token("admin", "secret")
 
     # Assert
     assert isinstance(result, TokenResponse)
@@ -182,7 +183,7 @@ def test_get_access_token_wrong_credentials(unauthorized_transport: httpx.MockTr
 
     # Act & Assert
     with pytest.raises(AuthenticationError, match="Invalid credentials") as exc_info:
-        c.get_access_token("wrong-id", "wrong-secret")
+        c.auth.get_access_token("wrong-id", "wrong-secret")
     assert exc_info.value.status_code == 401
 
 
@@ -193,7 +194,7 @@ def test_get_access_token_server_error(server_error_transport: httpx.MockTranspo
 
     # Act & Assert
     with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
-        c.get_access_token("admin", "secret")
+        c.auth.get_access_token("admin", "secret")
     assert exc_info.value.status_code == 503
 
 
@@ -204,7 +205,7 @@ def test_get_access_token_network_error(connect_error_transport: httpx.MockTrans
 
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error") as exc_info:
-        c.get_access_token("admin", "secret")
+        c.auth.get_access_token("admin", "secret")
 
 
 def test_get_access_token_api_error(api_error_transport):
@@ -214,7 +215,7 @@ def test_get_access_token_api_error(api_error_transport):
 
     # Act & Assert
     with pytest.raises(APIError, match="Too many redirect") as exc_info:
-        c.get_access_token("admin", "secret")
+        c.auth.get_access_token("admin", "secret")
     assert exc_info.value.status_code == 310
 
 
@@ -223,7 +224,7 @@ def test_get_access_token_empty_client_id(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_id must not be empty"):
-        mock_client.get_access_token("", "secret")
+        mock_client.auth.get_access_token("", "secret")
 
 
 def test_get_access_token_empty_client_secret(mock_client: Client) -> None:
@@ -231,7 +232,7 @@ def test_get_access_token_empty_client_secret(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
-        mock_client.get_access_token("client-id", "")
+        mock_client.auth.get_access_token("client-id", "")
 
 
 def test_get_access_token_whitespace_client_id(mock_client: Client) -> None:
@@ -239,7 +240,7 @@ def test_get_access_token_whitespace_client_id(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_id must not be empty"):
-        mock_client.get_access_token("   ", "secret")
+        mock_client.auth.get_access_token("   ", "secret")
 
 
 def test_get_access_token_whitespace_client_secret(mock_client: Client) -> None:
@@ -247,7 +248,7 @@ def test_get_access_token_whitespace_client_secret(mock_client: Client) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
-        mock_client.get_access_token("client-id", "   ")
+        mock_client.auth.get_access_token("client-id", "   ")
 
 
 # --- is_token_valid ---
@@ -257,7 +258,7 @@ def test_is_token_valid_returns_true_on_valid_token(mock_client: Client) -> None
     claims = {"sub": "user-123", "iss": "https://auth.example.com"}
     with patch.object(mock_client._jwt_verifier, "verify_sync", return_value=claims):
         # Act
-        result = mock_client.is_token_valid("any.jwt.token")
+        result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is True
@@ -278,11 +279,11 @@ def test_is_token_valid_logs_warning_on_invalid_token(
     mock_client: Client, exc: jwt.InvalidTokenError, exc_name: str, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python import client
+    from visionai_sdk_python.auth import resource as auth_resource
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
-        with caplog.at_level("WARNING", logger=client.__name__):
-            result = mock_client.is_token_valid("any.jwt.token")
+        with caplog.at_level("WARNING", logger=auth_resource.__name__):
+            result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is False
@@ -300,12 +301,12 @@ def test_is_token_valid_logs_error_on_jwks_failure(
     mock_client: Client, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python import client
+    from visionai_sdk_python.auth import resource as auth_resource
     exc = jwt.PyJWKClientError("Failed to fetch JWKS from endpoint")
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
-        with caplog.at_level("ERROR", logger=client.__name__):
-            result = mock_client.is_token_valid("any.jwt.token")
+        with caplog.at_level("ERROR", logger=auth_resource.__name__):
+            result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is False
@@ -322,12 +323,12 @@ def test_is_token_valid_logs_error_on_jwks_discovery_failure(
     mock_client: Client, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python import client
+    from visionai_sdk_python.auth import resource as auth_resource
     exc = JwksDiscoveryError("Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known")
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
-        with caplog.at_level("ERROR", logger=client.__name__):
-            result = mock_client.is_token_valid("any.jwt.token")
+        with caplog.at_level("ERROR", logger=auth_resource.__name__):
+            result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is False
@@ -347,7 +348,7 @@ def test_is_token_valid_propagates_unexpected_errors(
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act & Assert - Unexpected exceptions should propagate
         with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'verify'"):
-            mock_client.is_token_valid("any.jwt.token")
+            mock_client.auth.is_token_valid("any.jwt.token")
 
 
 # --- Resource cleanup ---
@@ -359,7 +360,7 @@ def test_client_context_manager(success_transport: httpx.MockTransport) -> None:
         client._client = httpx.Client(transport=success_transport)
 
         # Act
-        result = client.login("user@example.com", "password")
+        result = client.auth.login("user@example.com", "password")
 
         # Assert
         assert isinstance(result, TokenResponse)
@@ -375,7 +376,7 @@ def test_client_explicit_close(success_transport: httpx.MockTransport) -> None:
     c._client = httpx.Client(transport=success_transport)
 
     # Act
-    result = c.login("user@example.com", "password")
+    result = c.auth.login("user@example.com", "password")
 
     # Assert: client is open after use
     assert isinstance(result, TokenResponse)
@@ -427,7 +428,7 @@ def test_chat_raises_authentication_error_when_not_authenticated(mock_client: Cl
 
     # Act & Assert: chat() raises AuthenticationError
     with pytest.raises(AuthenticationError, match="Not authenticated"):
-        mock_client.chat(nim)
+        mock_client.vlm.chat(nim)
 
 
 def test_chat_raises_authentication_error_when_token_expired_without_credentials(mock_client: Client) -> None:
@@ -439,7 +440,7 @@ def test_chat_raises_authentication_error_when_token_expired_without_credentials
     with patch.object(mock_client, "_is_token_expiring_soon", return_value=True):
         nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
         with pytest.raises(AuthenticationError, match="no credentials available"):
-            mock_client.chat(nim)
+            mock_client.vlm.chat(nim)
 
 
 def test_chat_auto_refreshes_token_when_expiring_soon() -> None:
@@ -449,8 +450,8 @@ def test_chat_auto_refreshes_token_when_expiring_soon() -> None:
 
     # Act: call chat() when token is expiring
     with patch.object(c, "_is_token_expiring_soon", return_value=True):
-        with patch.object(c, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)) as mock_login:
-            c.chat(nim)
+        with patch.object(c.auth, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)) as mock_login:
+            c.vlm.chat(nim)
 
             # Assert: login was called to refresh token
             mock_login.assert_called_once_with(
@@ -464,7 +465,7 @@ def test_chat_invalid_dict_payload_raises_validation_error(mock_client: Client) 
     mock_client._store_token("valid.jwt.token", 3600, {"email": "test@example.com", "password": "password"}, "login")
     # Act & Assert
     with pytest.raises(ValidationError):
-        mock_client.chat({"bad_field": "value"})
+        mock_client.vlm.chat({"bad_field": "value"})
 
 
 def test_chat_with_valid_nim_model_returns_normal_model() -> None:
@@ -473,7 +474,7 @@ def test_chat_with_valid_nim_model_returns_normal_model() -> None:
     nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
 
     # Act
-    result = c.chat(nim)
+    result = c.vlm.chat(nim)
 
     # Assert
     assert isinstance(result, ResponseNormalModel)
@@ -493,7 +494,7 @@ def test_chat_returns_normal_model_for_non_error_statuses(
     c = _make_vlm_client(response_body)
 
     # Act
-    result = c.chat(VALID_NIM_PAYLOAD)
+    result = c.vlm.chat(VALID_NIM_PAYLOAD)
 
     # Assert
     assert isinstance(result, ResponseNormalModel)
@@ -511,7 +512,7 @@ def test_chat_returns_error_model_for_error_statuses(
     c = _make_vlm_client(response_body)
 
     # Act
-    result = c.chat(VALID_NIM_PAYLOAD)
+    result = c.vlm.chat(VALID_NIM_PAYLOAD)
 
     # Assert
     assert isinstance(result, ResponseErrorModel)
@@ -532,7 +533,7 @@ def test_get_chat_returns_normal_model_for_non_error_statuses(
     c = _make_vlm_client(response_body)
 
     # Act
-    result = c.get_chat("id-001")
+    result = c.vlm.get_chat("id-001")
 
     # Assert
     assert isinstance(result, ResponseNormalModel)
@@ -551,7 +552,7 @@ def test_get_chat_returns_error_model_for_error_statuses(
     c = _make_vlm_client(response_body)
 
     # Act
-    result = c.get_chat("id-001")
+    result = c.vlm.get_chat("id-001")
 
     # Assert
     assert isinstance(result, ResponseErrorModel)
