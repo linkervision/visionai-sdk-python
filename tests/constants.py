@@ -12,8 +12,20 @@ VALID_NIM_PAYLOAD = {
     "prompt": "Describe the image",
 }
 
-NORMAL_PENDING_RESPONSE   = {"chat_id": "id-001", "status": "pending",   "message": None}
-NORMAL_RUNNING_RESPONSE   = {"chat_id": "id-001", "status": "running",   "message": None}
-NORMAL_COMPLETED_RESPONSE = {"chat_id": "id-001", "status": "completed", "message": "done"}
-ERROR_FAILED_RESPONSE     = {"chat_id": "id-001", "status": "failed",  "error": "inference error"}
-ERROR_TIMEOUT_RESPONSE    = {"chat_id": "id-001", "status": "timeout", "error": "request timed out"}
+NORMAL_PENDING_RESPONSE = {"chat_id": "id-001", "status": "pending", "message": None}
+NORMAL_RUNNING_RESPONSE = {"chat_id": "id-001", "status": "running", "message": None}
+NORMAL_COMPLETED_RESPONSE = {
+    "chat_id": "id-001",
+    "status": "completed",
+    "message": "done",
+}
+ERROR_FAILED_RESPONSE = {
+    "chat_id": "id-001",
+    "status": "failed",
+    "error": "inference error",
+}
+ERROR_TIMEOUT_RESPONSE = {
+    "chat_id": "id-001",
+    "status": "timeout",
+    "error": "request timed out",
+}

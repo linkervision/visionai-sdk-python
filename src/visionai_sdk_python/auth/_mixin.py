@@ -1,16 +1,22 @@
 """Shared authentication business logic for sync and async resources."""
 
 import logging
+from typing import TYPE_CHECKING
 
 import jwt
 
 from ..exceptions import JwksDiscoveryError
 from .models import TokenResponse
 
+if TYPE_CHECKING:
+    from .._base import _BaseClient
+
 logger = logging.getLogger(__name__)
 
 
 class AuthMixin:
+    _sdk_client: "_BaseClient"
+
     """Shared authentication logic (validation, data preparation, parsing).
 
     This mixin contains all business logic that doesn't involve I/O operations.
@@ -36,9 +42,7 @@ class AuthMixin:
         if not password.strip():
             raise ValueError("password must not be empty")
 
-    def _validate_client_credentials(
-        self, client_id: str, client_secret: str
-    ) -> None:
+    def _validate_client_credentials(self, client_id: str, client_secret: str) -> None:
         """Validate client credentials.
 
         Args:
@@ -69,9 +73,7 @@ class AuthMixin:
         """
         return {"email": email, "password": password}
 
-    def _prepare_client_token_request(
-        self, client_id: str, client_secret: str
-    ) -> dict:
+    def _prepare_client_token_request(self, client_id: str, client_secret: str) -> dict:
         """Prepare client token request payload.
 
         Args:
@@ -101,7 +103,7 @@ class AuthMixin:
             Parsed TokenResponse
         """
         token = TokenResponse(**response_data)
-        self._client._store_token(
+        self._sdk_client._store_token(
             access_token=token.access_token,
             expires_in=token.expires_in,
             credentials=credentials,
@@ -112,26 +114,6 @@ class AuthMixin:
     # ==========================================================================
     # Token validation exception handling
     # ==========================================================================
-
-    def _handle_token_validation_exceptions(self, access_token: str) -> bool:
-        """Handle exceptions during token validation.
-
-        This method encapsulates the exception handling logic for is_token_valid().
-        Subclasses should call this with the appropriate verify method.
-
-        Args:
-            access_token: JWT access token to validate
-
-        Returns:
-            True if validation succeeds, False if expected exceptions occur
-
-        Note:
-            This method should be called within a try-except block that calls
-            the appropriate verify method (verify_sync or verify_async).
-        """
-        # This method will be called from subclasses after they attempt verification
-        # The actual verification is in the try block of the caller
-        pass
 
     def _log_token_validation_error(self, error: Exception, error_type: str) -> None:
         """Log token validation errors.

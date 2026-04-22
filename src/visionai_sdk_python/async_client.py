@@ -1,14 +1,10 @@
 import logging
 import httpx
-import jwt
 
 from ._base import _BaseClient
 from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .auth.async_resource import AsyncAuthResource
 from .vlm.async_resource import AsyncVLMResource
-
-
-logger = logging.getLogger(__name__)
 
 
 class AsyncClient(_BaseClient):
@@ -59,17 +55,13 @@ class AsyncClient(_BaseClient):
         """Close the HTTP client and release connections."""
         await self._client.aclose()
 
-
     async def __aenter__(self) -> "AsyncClient":
         """Async context manager entry."""
         return self
 
-
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Async context manager exit - close client."""
         await self.close()
-
-
 
     async def _refresh_token(self) -> None:
         """Refresh token using stored credentials.
@@ -98,10 +90,13 @@ class AsyncClient(_BaseClient):
             AuthenticationError: If no token is available or token expired without credentials.
         """
         if self._access_token is None:
-            raise AuthenticationError("Not authenticated. Call login() or get_access_token() first.")
+            raise AuthenticationError(
+                "Not authenticated. Call login() or get_access_token() first."
+            )
 
         if self._is_token_expiring_soon():
             if self._credentials is None:
-                raise AuthenticationError("Token expired and no credentials available for refresh")
+                raise AuthenticationError(
+                    "Token expired and no credentials available for refresh"
+                )
             await self._refresh_token()
-

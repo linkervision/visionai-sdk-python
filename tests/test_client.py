@@ -6,14 +6,29 @@ from unittest.mock import patch
 from pydantic import ValidationError
 
 from visionai_sdk_python.client import Client
-from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
+from visionai_sdk_python.exceptions import (
+    APIError,
+    AuthenticationError,
+    JwksDiscoveryError,
+    NetworkError,
+    ServerError,
+)
 from visionai_sdk_python.auth.models import TokenResponse
-from visionai_sdk_python.vlm.models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel
+from visionai_sdk_python.vlm.models import (
+    NIMRequestModel,
+    ResponseErrorModel,
+    ResponseNormalModel,
+)
 from tests.constants import (
-    AUTH_URL, VLM_URL, TOKEN_PAYLOAD,
+    AUTH_URL,
+    VLM_URL,
+    TOKEN_PAYLOAD,
     VALID_NIM_PAYLOAD,
-    NORMAL_PENDING_RESPONSE, NORMAL_RUNNING_RESPONSE, NORMAL_COMPLETED_RESPONSE,
-    ERROR_FAILED_RESPONSE, ERROR_TIMEOUT_RESPONSE,
+    NORMAL_PENDING_RESPONSE,
+    NORMAL_RUNNING_RESPONSE,
+    NORMAL_COMPLETED_RESPONSE,
+    ERROR_FAILED_RESPONSE,
+    ERROR_TIMEOUT_RESPONSE,
 )
 
 
@@ -42,8 +57,10 @@ def server_error_transport() -> httpx.MockTransport:
 @pytest.fixture
 def connect_error_transport() -> httpx.MockTransport:
     """Transport that raises ConnectError."""
+
     def _raise(_: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Connection refused")
+
     return httpx.MockTransport(_raise)
 
 
@@ -65,6 +82,7 @@ def mock_client(success_transport: httpx.MockTransport) -> Client:
 
 # --- login ---
 
+
 def test_login_success(mock_client: Client) -> None:
     # Arrange: mock_client fixture provides a client with successful transport
 
@@ -79,10 +97,13 @@ def test_login_success(mock_client: Client) -> None:
     # Assert store token
     assert mock_client._access_token == TOKEN_PAYLOAD["access_token"]
     assert mock_client._token_expires_at is not None
-    assert mock_client._credentials == {"email": "user@example.com", "password": "correct-password"}
+    assert mock_client._credentials == {
+        "email": "user@example.com",
+        "password": "correct-password",
+    }
     assert mock_client._credentials_type == "login"
 
- 
+
 def test_login_wrong_credentials(unauthorized_transport: httpx.MockTransport) -> None:
     # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
@@ -160,6 +181,7 @@ def test_login_whitespace_password(mock_client: Client) -> None:
 
 # --- get_access_token ---
 
+
 def test_get_access_token_success(mock_client: Client) -> None:
     # Arrange: mock_client fixture provides a client with successful transport
 
@@ -173,10 +195,12 @@ def test_get_access_token_success(mock_client: Client) -> None:
     assert mock_client._access_token == TOKEN_PAYLOAD["access_token"]
     assert mock_client._is_token_expiring_soon is not None
     assert mock_client._credentials == {"client_id": "admin", "client_secret": "secret"}
-    assert mock_client._credentials_type == 'client'
+    assert mock_client._credentials_type == "client"
 
 
-def test_get_access_token_wrong_credentials(unauthorized_transport: httpx.MockTransport) -> None:
+def test_get_access_token_wrong_credentials(
+    unauthorized_transport: httpx.MockTransport,
+) -> None:
     # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=unauthorized_transport)
@@ -187,7 +211,9 @@ def test_get_access_token_wrong_credentials(unauthorized_transport: httpx.MockTr
     assert exc_info.value.status_code == 401
 
 
-def test_get_access_token_server_error(server_error_transport: httpx.MockTransport) -> None:
+def test_get_access_token_server_error(
+    server_error_transport: httpx.MockTransport,
+) -> None:
     # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=server_error_transport)
@@ -198,7 +224,9 @@ def test_get_access_token_server_error(server_error_transport: httpx.MockTranspo
     assert exc_info.value.status_code == 503
 
 
-def test_get_access_token_network_error(connect_error_transport: httpx.MockTransport) -> None:
+def test_get_access_token_network_error(
+    connect_error_transport: httpx.MockTransport,
+) -> None:
     # Arrange
     c = Client(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.Client(transport=connect_error_transport)
@@ -253,6 +281,7 @@ def test_get_access_token_whitespace_client_secret(mock_client: Client) -> None:
 
 # --- is_token_valid ---
 
+
 def test_is_token_valid_returns_true_on_valid_token(mock_client: Client) -> None:
     # Arrange
     claims = {"sub": "user-123", "iss": "https://auth.example.com"}
@@ -268,10 +297,18 @@ def test_is_token_valid_returns_true_on_valid_token(mock_client: Client) -> None
     "exc,exc_name",
     [
         (jwt.ExpiredSignatureError("Token has expired"), "ExpiredSignatureError"),
-        (jwt.InvalidSignatureError("Signature verification failed"), "InvalidSignatureError"),
+        (
+            jwt.InvalidSignatureError("Signature verification failed"),
+            "InvalidSignatureError",
+        ),
         (jwt.DecodeError("Not enough segments"), "DecodeError"),
         (jwt.MissingRequiredClaimError("iss"), "MissingRequiredClaimError"),
-        (jwt.InvalidIssuerError("Token issuer 'https://evil.com/' is not in the allowed issuers list"), "InvalidIssuerError"),
+        (
+            jwt.InvalidIssuerError(
+                "Token issuer 'https://evil.com/' is not in the allowed issuers list"
+            ),
+            "InvalidIssuerError",
+        ),
     ],
     ids=["expired", "invalid_signature", "malformed", "missing_iss", "invalid_issuer"],
 )
@@ -280,6 +317,7 @@ def test_is_token_valid_logs_warning_on_invalid_token(
 ) -> None:
     # Arrange
     from visionai_sdk_python.auth import resource as auth_resource
+
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
         with caplog.at_level("WARNING", logger=auth_resource.__name__):
@@ -297,11 +335,10 @@ def test_is_token_valid_logs_warning_on_invalid_token(
     assert log_record.jwt_error_message == str(exc)
 
 
-def test_is_token_valid_logs_error_on_jwks_failure(
-    mock_client: Client, caplog
-) -> None:
+def test_is_token_valid_logs_error_on_jwks_failure(mock_client: Client, caplog) -> None:
     # Arrange
     from visionai_sdk_python.auth import resource as auth_resource
+
     exc = jwt.PyJWKClientError("Failed to fetch JWKS from endpoint")
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
@@ -324,7 +361,10 @@ def test_is_token_valid_logs_error_on_jwks_discovery_failure(
 ) -> None:
     # Arrange
     from visionai_sdk_python.auth import resource as auth_resource
-    exc = JwksDiscoveryError("Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known")
+
+    exc = JwksDiscoveryError(
+        "Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known"
+    )
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
         with caplog.at_level("ERROR", logger=auth_resource.__name__):
@@ -340,18 +380,19 @@ def test_is_token_valid_logs_error_on_jwks_discovery_failure(
     assert log_record.jwt_error_message == str(exc)
 
 
-def test_is_token_valid_propagates_unexpected_errors(
-    mock_client: Client
-) -> None:
+def test_is_token_valid_propagates_unexpected_errors(mock_client: Client) -> None:
     # Arrange - Simulate a programming error (e.g., AttributeError)
     exc = AttributeError("'NoneType' object has no attribute 'verify'")
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act & Assert - Unexpected exceptions should propagate
-        with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'verify'"):
+        with pytest.raises(
+            AttributeError, match="'NoneType' object has no attribute 'verify'"
+        ):
             mock_client.auth.is_token_valid("any.jwt.token")
 
 
 # --- Resource cleanup ---
+
 
 def test_client_context_manager(success_transport: httpx.MockTransport) -> None:
     """Test that client properly closes resources when used as context manager."""
@@ -405,6 +446,7 @@ def test_client_close_idempotent(success_transport: httpx.MockTransport) -> None
 
 # --- chat / get_chat shared fixtures & helpers ---
 
+
 def _make_vlm_client(response_body: dict) -> Client:
     """Return a Client whose transport always returns response_body and that is authenticated."""
     transport = httpx.MockTransport(lambda _: httpx.Response(200, json=response_body))
@@ -422,7 +464,10 @@ def _make_vlm_client(response_body: dict) -> Client:
 
 # --- chat ---
 
-def test_chat_raises_authentication_error_when_not_authenticated(mock_client: Client) -> None:
+
+def test_chat_raises_authentication_error_when_not_authenticated(
+    mock_client: Client,
+) -> None:
     # Arrange: client has no token
     nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
 
@@ -431,7 +476,9 @@ def test_chat_raises_authentication_error_when_not_authenticated(mock_client: Cl
         mock_client.vlm.chat(nim)
 
 
-def test_chat_raises_authentication_error_when_token_expired_without_credentials(mock_client: Client) -> None:
+def test_chat_raises_authentication_error_when_token_expired_without_credentials(
+    mock_client: Client,
+) -> None:
     # Arrange: client has token but no credentials, and token is expiring
     mock_client._access_token = "fake_token"
     mock_client._credentials = None
@@ -450,19 +497,25 @@ def test_chat_auto_refreshes_token_when_expiring_soon() -> None:
 
     # Act: call chat() when token is expiring
     with patch.object(c, "_is_token_expiring_soon", return_value=True):
-        with patch.object(c.auth, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)) as mock_login:
+        with patch.object(
+            c.auth, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)
+        ) as mock_login:
             c.vlm.chat(nim)
 
             # Assert: login was called to refresh token
             mock_login.assert_called_once_with(
-                email="test@example.com",
-                password="password"
+                email="test@example.com", password="password"
             )
 
 
 def test_chat_invalid_dict_payload_raises_validation_error(mock_client: Client) -> None:
     # Arrange: client is authenticated, payload missing required fields
-    mock_client._store_token("valid.jwt.token", 3600, {"email": "test@example.com", "password": "password"}, "login")
+    mock_client._store_token(
+        "valid.jwt.token",
+        3600,
+        {"email": "test@example.com", "password": "password"},
+        "login",
+    )
     # Act & Assert
     with pytest.raises(ValidationError):
         mock_client.vlm.chat({"bad_field": "value"})
@@ -482,11 +535,15 @@ def test_chat_with_valid_nim_model_returns_normal_model() -> None:
     assert result.chat_id == "id-001"
 
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (NORMAL_PENDING_RESPONSE,   "pending"),
-    (NORMAL_RUNNING_RESPONSE,   "running"),
-    (NORMAL_COMPLETED_RESPONSE, "completed"),
-], ids=["pending", "running", "completed"])
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (NORMAL_PENDING_RESPONSE, "pending"),
+        (NORMAL_RUNNING_RESPONSE, "running"),
+        (NORMAL_COMPLETED_RESPONSE, "completed"),
+    ],
+    ids=["pending", "running", "completed"],
+)
 def test_chat_returns_normal_model_for_non_error_statuses(
     response_body: dict, expected_status: str
 ) -> None:
@@ -501,10 +558,14 @@ def test_chat_returns_normal_model_for_non_error_statuses(
     assert result.status == expected_status
 
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (ERROR_FAILED_RESPONSE,  "failed"),
-    (ERROR_TIMEOUT_RESPONSE, "timeout"),
-], ids=["failed", "timeout"])
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (ERROR_FAILED_RESPONSE, "failed"),
+        (ERROR_TIMEOUT_RESPONSE, "timeout"),
+    ],
+    ids=["failed", "timeout"],
+)
 def test_chat_returns_error_model_for_error_statuses(
     response_body: dict, expected_status: str
 ) -> None:
@@ -521,11 +582,16 @@ def test_chat_returns_error_model_for_error_statuses(
 
 # --- get_chat ---
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (NORMAL_PENDING_RESPONSE,   "pending"),
-    (NORMAL_RUNNING_RESPONSE,   "running"),
-    (NORMAL_COMPLETED_RESPONSE, "completed"),
-], ids=["pending", "running", "completed"])
+
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (NORMAL_PENDING_RESPONSE, "pending"),
+        (NORMAL_RUNNING_RESPONSE, "running"),
+        (NORMAL_COMPLETED_RESPONSE, "completed"),
+    ],
+    ids=["pending", "running", "completed"],
+)
 def test_get_chat_returns_normal_model_for_non_error_statuses(
     response_body: dict, expected_status: str
 ) -> None:
@@ -541,10 +607,14 @@ def test_get_chat_returns_normal_model_for_non_error_statuses(
     assert result.chat_id == "id-001"
 
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (ERROR_FAILED_RESPONSE,  "failed"),
-    (ERROR_TIMEOUT_RESPONSE, "timeout"),
-], ids=["failed", "timeout"])
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (ERROR_FAILED_RESPONSE, "failed"),
+        (ERROR_TIMEOUT_RESPONSE, "timeout"),
+    ],
+    ids=["failed", "timeout"],
+)
 def test_get_chat_returns_error_model_for_error_statuses(
     response_body: dict, expected_status: str
 ) -> None:
@@ -558,5 +628,3 @@ def test_get_chat_returns_error_model_for_error_statuses(
     assert isinstance(result, ResponseErrorModel)
     assert result.status == expected_status
     assert result.error is not None
-
-
