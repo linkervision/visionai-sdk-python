@@ -5,7 +5,9 @@ from visionai_sdk_python._base import _BaseClient
 
 
 def test_init_stores_attributes() -> None:
-    client = _BaseClient(auth_url="https://auth.example.com", vlm_url="https://vlm.example.com")
+    client = _BaseClient(
+        auth_url="https://auth.example.com", vlm_url="https://vlm.example.com"
+    )
     assert client.auth_url == "https://auth.example.com"
     assert client.vlm_url == "https://vlm.example.com"
     assert client.verify_ssl is True

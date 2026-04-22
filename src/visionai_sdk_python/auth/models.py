@@ -6,6 +6,7 @@ class TokenResponse(BaseModel):
 
     Used by both /api/users/jwt and /api/users/client-token endpoints.
     """
+
     access_token: str = Field(..., description="JWT access token")
     expires_in: int = Field(..., description="Token expiration time in seconds")
     token_type: str = Field(..., description="Token type (e.g., 'Bearer')")

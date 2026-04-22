@@ -19,7 +19,7 @@ class VLMResource(VLMMixin):
         Args:
             client: Parent sync client instance
         """
-        self._client = client
+        self._sdk_client = client
 
     def chat(
         self, payload: NIMRequestModel | dict
@@ -44,25 +44,23 @@ class VLMResource(VLMMixin):
             VisionaiSDKError: If the request fails for any other reason.
         """
         # Ensure token is valid
-        self._client._ensure_token()
+        self._sdk_client._ensure_token()
 
         # Prepare request (from Mixin)
         body = self._prepare_chat_request(payload)
 
         # I/O operation (sync)
-        response = self._client._request(
+        response = self._sdk_client._request(
             "POST",
-            self._client._build_url(self._client.vlm_url, VLMEndpoint.CHAT),
-            headers=self._client._build_auth_header(self._client._access_token),
+            self._sdk_client._build_url(self._sdk_client.vlm_url, VLMEndpoint.CHAT),
+            headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
             json=body,
         )
 
         # Parse response (from Mixin)
         return self._parse_chat_response(response.json())
 
-    def get_chat(
-        self, result_id: str
-    ) -> ResponseNormalModel | ResponseErrorModel:
+    def get_chat(self, result_id: str) -> ResponseNormalModel | ResponseErrorModel:
         """Poll the result of a previously submitted inference request.
 
         Uses the internally stored access token obtained from login() or get_access_token().
@@ -81,15 +79,15 @@ class VLMResource(VLMMixin):
             VisionaiSDKError: If the request fails for any other reason.
         """
         # Ensure token is valid
-        self._client._ensure_token()
+        self._sdk_client._ensure_token()
 
         # I/O operation (sync)
-        response = self._client._request(
+        response = self._sdk_client._request(
             "GET",
-            self._client._build_url(
-                self._client.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"
+            self._sdk_client._build_url(
+                self._sdk_client.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"
             ),
-            headers=self._client._build_auth_header(self._client._access_token),
+            headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
         )
 
         # Parse response (from Mixin)

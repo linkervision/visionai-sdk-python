@@ -1,13 +1,10 @@
 import logging
 import httpx
-import jwt
 
 from ._base import _BaseClient
 from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .auth.resource import AuthResource
 from .vlm.resource import VLMResource
-
-logger = logging.getLogger(__name__)
 
 
 class Client(_BaseClient):
@@ -42,7 +39,6 @@ class Client(_BaseClient):
         self.auth = AuthResource(self)
         self.vlm = VLMResource(self)
 
-
     def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """Execute an HTTP request, mapping httpx exceptions to SDK exceptions."""
         try:
@@ -59,17 +55,13 @@ class Client(_BaseClient):
         """Close the HTTP client and release connections."""
         self._client.close()
 
-
     def __enter__(self) -> "Client":
         """Context manager entry."""
         return self
 
-
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Context manager exit - close client."""
         self.close()
-    
-
 
     def _refresh_token(self) -> None:
         """Refresh token using stored credentials.
@@ -98,10 +90,13 @@ class Client(_BaseClient):
             AuthenticationError: If no token is available or token expired without credentials.
         """
         if self._access_token is None:
-            raise AuthenticationError("Not authenticated. Call login() or get_access_token() first.")
+            raise AuthenticationError(
+                "Not authenticated. Call login() or get_access_token() first."
+            )
 
         if self._is_token_expiring_soon():
             if self._credentials is None:
-                raise AuthenticationError("Token expired and no credentials available for refresh")
+                raise AuthenticationError(
+                    "Token expired and no credentials available for refresh"
+                )
             self._refresh_token()
-

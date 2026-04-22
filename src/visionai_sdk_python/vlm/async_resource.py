@@ -19,7 +19,7 @@ class AsyncVLMResource(VLMMixin):
         Args:
             client: Parent async client instance
         """
-        self._client = client
+        self._sdk_client = client
 
     async def chat(
         self, payload: NIMRequestModel | dict
@@ -44,16 +44,16 @@ class AsyncVLMResource(VLMMixin):
             VisionaiSDKError: If the request fails for any other reason.
         """
         # Ensure token is valid
-        await self._client._ensure_token()
+        await self._sdk_client._ensure_token()
 
         # Prepare request (from Mixin)
         body = self._prepare_chat_request(payload)
 
         # I/O operation (async)
-        response = await self._client._request(
+        response = await self._sdk_client._request(
             "POST",
-            self._client._build_url(self._client.vlm_url, VLMEndpoint.CHAT),
-            headers=self._client._build_auth_header(self._client._access_token),
+            self._sdk_client._build_url(self._sdk_client.vlm_url, VLMEndpoint.CHAT),
+            headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
             json=body,
         )
 
@@ -81,15 +81,15 @@ class AsyncVLMResource(VLMMixin):
             VisionaiSDKError: If the request fails for any other reason.
         """
         # Ensure token is valid
-        await self._client._ensure_token()
+        await self._sdk_client._ensure_token()
 
         # I/O operation (async)
-        response = await self._client._request(
+        response = await self._sdk_client._request(
             "GET",
-            self._client._build_url(
-                self._client.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"
+            self._sdk_client._build_url(
+                self._sdk_client.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"
             ),
-            headers=self._client._build_auth_header(self._client._access_token),
+            headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
         )
 
         # Parse response (from Mixin)
