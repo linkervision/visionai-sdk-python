@@ -13,8 +13,6 @@ from ._mixin import AuthMixin
 if TYPE_CHECKING:
     from ..async_client import AsyncClient
 
-logger = logging.getLogger(__name__)
-
 
 class AsyncAuthResource(AuthMixin):
     """Asynchronous authentication operations."""
@@ -25,7 +23,7 @@ class AsyncAuthResource(AuthMixin):
         Args:
             client: Parent async client instance
         """
-        self._client = client
+        self._sdk_client = client
 
     async def get_access_token(
         self, client_id: str, client_secret: str
@@ -51,11 +49,9 @@ class AsyncAuthResource(AuthMixin):
         self._validate_client_credentials(client_id, client_secret)
 
         # I/O operation (async)
-        response = await self._client._request(
+        response = await self._sdk_client._request(
             "POST",
-            self._client._build_url(
-                self._client.auth_url, AuthEndpoint.CLIENT_TOKEN
-            ),
+            self._sdk_client._build_url(self._sdk_client.auth_url, AuthEndpoint.CLIENT_TOKEN),
             json=self._prepare_client_token_request(client_id, client_secret),
         )
 
@@ -88,9 +84,9 @@ class AsyncAuthResource(AuthMixin):
         self._validate_login_credentials(email, password)
 
         # I/O operation (async)
-        response = await self._client._request(
+        response = await self._sdk_client._request(
             "POST",
-            self._client._build_url(self._client.auth_url, AuthEndpoint.LOGIN),
+            self._sdk_client._build_url(self._sdk_client.auth_url, AuthEndpoint.LOGIN),
             json=self._prepare_login_request(email, password),
         )
 
@@ -119,7 +115,7 @@ class AsyncAuthResource(AuthMixin):
         """
         try:
             # I/O operation (async)
-            await self._client._jwt_verifier.verify_async(access_token)
+            await self._sdk_client._jwt_verifier.verify_async(access_token)
             return True
         except jwt.InvalidTokenError as e:
             self._log_token_validation_error(e, "InvalidTokenError")

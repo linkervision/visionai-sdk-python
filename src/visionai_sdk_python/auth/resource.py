@@ -13,8 +13,6 @@ from ._mixin import AuthMixin
 if TYPE_CHECKING:
     from ..client import Client
 
-logger = logging.getLogger(__name__)
-
 
 class AuthResource(AuthMixin):
     """Synchronous authentication operations."""
@@ -25,7 +23,7 @@ class AuthResource(AuthMixin):
         Args:
             client: Parent sync client instance
         """
-        self._client = client
+        self._sdk_client = client
 
     def get_access_token(self, client_id: str, client_secret: str) -> TokenResponse:
         """Get access token using client credentials flow.
@@ -49,11 +47,9 @@ class AuthResource(AuthMixin):
         self._validate_client_credentials(client_id, client_secret)
 
         # I/O operation (sync)
-        response = self._client._request(
+        response = self._sdk_client._request(
             "POST",
-            self._client._build_url(
-                self._client.auth_url, AuthEndpoint.CLIENT_TOKEN
-            ),
+            self._sdk_client._build_url(self._sdk_client.auth_url, AuthEndpoint.CLIENT_TOKEN),
             json=self._prepare_client_token_request(client_id, client_secret),
         )
 
@@ -86,9 +82,9 @@ class AuthResource(AuthMixin):
         self._validate_login_credentials(email, password)
 
         # I/O operation (sync)
-        response = self._client._request(
+        response = self._sdk_client._request(
             "POST",
-            self._client._build_url(self._client.auth_url, AuthEndpoint.LOGIN),
+            self._sdk_client._build_url(self._sdk_client.auth_url, AuthEndpoint.LOGIN),
             json=self._prepare_login_request(email, password),
         )
 
@@ -117,7 +113,7 @@ class AuthResource(AuthMixin):
         """
         try:
             # I/O operation (sync)
-            self._client._jwt_verifier.verify_sync(access_token)
+            self._sdk_client._jwt_verifier.verify_sync(access_token)
             return True
         except jwt.InvalidTokenError as e:
             self._log_token_validation_error(e, "InvalidTokenError")
