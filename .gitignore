@@ -65,5 +65,11 @@ dmypy.json
 .python-version
 
 
+# Local dev scripts
+main.py
+
+# Media
+*.jpg
+
 # Claude
 .claude/
