@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 class AuthResource(AuthMixin):
     """Synchronous authentication operations."""
 
+    _sdk_client: "Client"
+
     def __init__(self, client: "Client") -> None:
         """Initialize auth resource.
 

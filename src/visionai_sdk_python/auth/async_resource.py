@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 class AsyncAuthResource(AuthMixin):
     """Asynchronous authentication operations."""
 
+    _sdk_client: "AsyncClient"
+
     def __init__(self, client: "AsyncClient") -> None:
         """Initialize async auth resource.
 

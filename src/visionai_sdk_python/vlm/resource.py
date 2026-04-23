@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 class VLMResource(VLMMixin):
     """Synchronous VLM operations."""
 
+    _sdk_client: "Client"
+
     def __init__(self, client: "Client") -> None:
         """Initialize VLM resource.
 

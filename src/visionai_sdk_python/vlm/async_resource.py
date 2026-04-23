@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 class AsyncVLMResource(VLMMixin):
     """Asynchronous VLM operations."""
 
+    _sdk_client: "AsyncClient"
+
     def __init__(self, client: "AsyncClient") -> None:
         """Initialize async VLM resource.
 
