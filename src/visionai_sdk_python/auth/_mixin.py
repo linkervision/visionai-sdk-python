@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class AuthMixin:
-    _sdk_client: "_BaseClient"
-
     """Shared authentication logic (validation, data preparation, parsing).
 
     This mixin contains all business logic that doesn't involve I/O operations.
@@ -26,6 +24,8 @@ class AuthMixin:
     # ==========================================================================
     # Validation methods
     # ==========================================================================
+
+    _sdk_client: "_BaseClient"
 
     def _validate_login_credentials(self, email: str, password: str) -> None:
         """Validate login credentials.
