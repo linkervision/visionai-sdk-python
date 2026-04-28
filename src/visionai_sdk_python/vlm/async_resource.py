@@ -3,8 +3,8 @@
 from typing import TYPE_CHECKING
 
 from ..endpoints import VLMEndpoint
-from .models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel
 from ._mixin import VLMMixin
+from .models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel
 
 if TYPE_CHECKING:
     from ..async_client import AsyncClient

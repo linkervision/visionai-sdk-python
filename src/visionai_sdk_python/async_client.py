@@ -1,9 +1,8 @@
-import logging
 import httpx
 
 from ._base import _BaseClient
-from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .auth.async_resource import AsyncAuthResource
+from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .vlm.async_resource import AsyncVLMResource
 
 
