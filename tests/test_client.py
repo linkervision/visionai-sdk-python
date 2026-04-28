@@ -1,10 +1,22 @@
-import pytest
-import httpx
-import jwt
 from unittest.mock import patch
 
+import httpx
+import jwt
+import pytest
 from pydantic import ValidationError
 
+from tests.constants import (
+    AUTH_URL,
+    ERROR_FAILED_RESPONSE,
+    ERROR_TIMEOUT_RESPONSE,
+    NORMAL_COMPLETED_RESPONSE,
+    NORMAL_PENDING_RESPONSE,
+    NORMAL_RUNNING_RESPONSE,
+    TOKEN_PAYLOAD,
+    VALID_NIM_PAYLOAD,
+    VLM_URL,
+)
+from visionai_sdk_python.auth.models import TokenResponse
 from visionai_sdk_python.client import Client
 from visionai_sdk_python.exceptions import (
     APIError,
@@ -13,22 +25,10 @@ from visionai_sdk_python.exceptions import (
     NetworkError,
     ServerError,
 )
-from visionai_sdk_python.auth.models import TokenResponse
 from visionai_sdk_python.vlm.models import (
     NIMRequestModel,
     ResponseErrorModel,
     ResponseNormalModel,
-)
-from tests.constants import (
-    AUTH_URL,
-    VLM_URL,
-    TOKEN_PAYLOAD,
-    VALID_NIM_PAYLOAD,
-    NORMAL_PENDING_RESPONSE,
-    NORMAL_RUNNING_RESPONSE,
-    NORMAL_COMPLETED_RESPONSE,
-    ERROR_FAILED_RESPONSE,
-    ERROR_TIMEOUT_RESPONSE,
 )
 
 
@@ -232,7 +232,7 @@ def test_get_access_token_network_error(
     c._client = httpx.Client(transport=connect_error_transport)
 
     # Act & Assert
-    with pytest.raises(NetworkError, match="Network error") as exc_info:
+    with pytest.raises(NetworkError, match="Network error"):
         c.auth.get_access_token("admin", "secret")
 
 
@@ -316,11 +316,11 @@ def test_is_token_valid_logs_warning_on_invalid_token(
     mock_client: Client, exc: jwt.InvalidTokenError, exc_name: str, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python.auth import resource as auth_resource
+    from visionai_sdk_python.auth import _mixin
 
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
-        with caplog.at_level("WARNING", logger=auth_resource.__name__):
+        with caplog.at_level("WARNING", logger=_mixin.__name__):
             result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
@@ -337,12 +337,12 @@ def test_is_token_valid_logs_warning_on_invalid_token(
 
 def test_is_token_valid_logs_error_on_jwks_failure(mock_client: Client, caplog) -> None:
     # Arrange
-    from visionai_sdk_python.auth import resource as auth_resource
+    from visionai_sdk_python.auth import _mixin
 
     exc = jwt.PyJWKClientError("Failed to fetch JWKS from endpoint")
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
-        with caplog.at_level("ERROR", logger=auth_resource.__name__):
+        with caplog.at_level("ERROR", logger=_mixin.__name__):
             result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
@@ -360,14 +360,14 @@ def test_is_token_valid_logs_error_on_jwks_discovery_failure(
     mock_client: Client, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python.auth import resource as auth_resource
+    from visionai_sdk_python.auth import _mixin
 
     exc = JwksDiscoveryError(
         "Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known"
     )
     with patch.object(mock_client._jwt_verifier, "verify_sync", side_effect=exc):
         # Act
-        with caplog.at_level("ERROR", logger=auth_resource.__name__):
+        with caplog.at_level("ERROR", logger=_mixin.__name__):
             result = mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
