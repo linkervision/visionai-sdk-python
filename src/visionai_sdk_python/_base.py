@@ -1,7 +1,10 @@
 import time
-import httpx
 from typing import Literal
 
+import httpx
+
+from ._jwt_verifier import JwtVerifier
+from .constants import resolve_allowed_issuers
 from .exceptions import (
     APIError,
     AuthenticationError,
@@ -9,8 +12,6 @@ from .exceptions import (
     PermissionDeniedError,
     ServerError,
 )
-from ._jwt_verifier import JwtVerifier
-from .constants import resolve_allowed_issuers
 
 
 class _BaseClient:
@@ -204,5 +205,5 @@ class _BaseClient:
                 raise ClientError(status, detail) from e
             if 500 <= status < 600:
                 raise ServerError(status, detail) from e
-            raise APIError(status, detail)
+            raise APIError(status, detail) from e
         return response

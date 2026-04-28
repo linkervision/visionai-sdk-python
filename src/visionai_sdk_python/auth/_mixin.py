@@ -115,12 +115,11 @@ class AuthMixin:
     # Token validation exception handling
     # ==========================================================================
 
-    def _log_token_validation_error(self, error: Exception, error_type: str) -> None:
+    def _log_token_validation_error(self, error: Exception) -> None:
         """Log token validation errors.
 
         Args:
             error: The exception that occurred
-            error_type: Type of error for logging categorization
         """
         if isinstance(error, jwt.InvalidTokenError):
             logger.warning(

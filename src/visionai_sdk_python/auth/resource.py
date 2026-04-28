@@ -1,14 +1,13 @@
 """Authentication resource for sync operations."""
 
-import logging
 from typing import TYPE_CHECKING
 
 import jwt
 
 from ..endpoints import AuthEndpoint
 from ..exceptions import JwksDiscoveryError
-from .models import TokenResponse
 from ._mixin import AuthMixin
+from .models import TokenResponse
 
 if TYPE_CHECKING:
     from ..client import Client
@@ -118,11 +117,11 @@ class AuthResource(AuthMixin):
             self._sdk_client._jwt_verifier.verify_sync(access_token)
             return True
         except jwt.InvalidTokenError as e:
-            self._log_token_validation_error(e, "InvalidTokenError")
+            self._log_token_validation_error(e)
             return False
         except jwt.PyJWKClientError as e:
-            self._log_token_validation_error(e, "PyJWKClientError")
+            self._log_token_validation_error(e)
             return False
         except JwksDiscoveryError as e:
-            self._log_token_validation_error(e, "JwksDiscoveryError")
+            self._log_token_validation_error(e)
             return False
