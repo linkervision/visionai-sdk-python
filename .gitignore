@@ -65,11 +65,8 @@ dmypy.json
 .python-version
 
 
-# Local dev scripts
-main.py
-
-# Media
-*.jpg
+# Local test usage
+examples/
 
 # Claude
 .claude/
