@@ -426,13 +426,36 @@ class DatasetEndpoint:
 
 #### 8. Register in Clients
 
+If your feature requires a new service URL, **first add it to `_BaseClient`** in `_base.py` — all URL fields are owned by the base class and the subclass merely forwards them via `super().__init__()`.
+
+**`_base.py` (only if adding a new URL):**
+```python
+class _BaseClient:
+    def __init__(
+        self,
+        auth_url: str,
+        vlm_url: str,
+        dataset_url: str,           # add new URL parameter
+        allowed_issuers: list[str] | None = None,
+        verify_ssl: bool = True,
+        timeout: float = 10.0,
+        max_connections: int = 100,
+        max_keepalive_connections: int = 20,
+    ) -> None:
+        ...
+        if not dataset_url.strip():
+            raise ValueError("dataset_url must not be empty")
+        self.dataset_url = dataset_url.strip()   # store it here
+        ...
+```
+
 **`client.py`:**
 ```python
 from .dataset.resource import DatasetResource
 
 class Client(_BaseClient):
     def __init__(self, auth_url: str, vlm_url: str, dataset_url: str, ...):
-        super().__init__(...)
+        super().__init__(auth_url=auth_url, vlm_url=vlm_url, dataset_url=dataset_url, ...)
         self.auth = AuthResource(self)
         self.vlm = VLMResource(self)
         self.dataset = DatasetResource(self)  # Register new feature
@@ -444,7 +467,7 @@ from .dataset.async_resource import AsyncDatasetResource
 
 class AsyncClient(_BaseClient):
     def __init__(self, auth_url: str, vlm_url: str, dataset_url: str, ...):
-        super().__init__(...)
+        super().__init__(auth_url=auth_url, vlm_url=vlm_url, dataset_url=dataset_url, ...)
         self.auth = AsyncAuthResource(self)
         self.vlm = AsyncVLMResource(self)
         self.dataset = AsyncDatasetResource(self)  # Register new feature
