@@ -65,5 +65,8 @@ dmypy.json
 .python-version
 
 
+# Local test usage
+examples/
+
 # Claude
 .claude/

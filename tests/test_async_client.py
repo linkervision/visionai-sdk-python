@@ -1,18 +1,34 @@
-import pytest
-import httpx
-import jwt
 from unittest.mock import patch
 
+import httpx
+import jwt
+import pytest
 from pydantic import ValidationError
 
-from visionai_sdk_python.async_client import AsyncClient
-from visionai_sdk_python.exceptions import APIError, AuthenticationError, JwksDiscoveryError, NetworkError, ServerError
-from visionai_sdk_python.models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel, TokenResponse
 from tests.constants import (
-    AUTH_URL, VLM_URL, TOKEN_PAYLOAD,
+    AUTH_URL,
+    ERROR_FAILED_RESPONSE,
+    ERROR_TIMEOUT_RESPONSE,
+    NORMAL_COMPLETED_RESPONSE,
+    NORMAL_PENDING_RESPONSE,
+    NORMAL_RUNNING_RESPONSE,
+    TOKEN_PAYLOAD,
     VALID_NIM_PAYLOAD,
-    NORMAL_PENDING_RESPONSE, NORMAL_RUNNING_RESPONSE, NORMAL_COMPLETED_RESPONSE,
-    ERROR_FAILED_RESPONSE, ERROR_TIMEOUT_RESPONSE,
+    VLM_URL,
+)
+from visionai_sdk_python.async_client import AsyncClient
+from visionai_sdk_python.auth.models import TokenResponse
+from visionai_sdk_python.exceptions import (
+    APIError,
+    AuthenticationError,
+    JwksDiscoveryError,
+    NetworkError,
+    ServerError,
+)
+from visionai_sdk_python.vlm.models import (
+    NIMRequestModel,
+    ResponseErrorModel,
+    ResponseNormalModel,
 )
 
 
@@ -77,12 +93,13 @@ def mock_client(success_transport: AsyncMockTransport) -> AsyncClient:
 
 # --- login ---
 
+
 @pytest.mark.asyncio
 async def test_login_success(mock_client: AsyncClient) -> None:
     # Arrange: mock_client fixture provides an AsyncClient backed by a 200 success transport
 
     # Act
-    result = await mock_client.login("user@example.com", "correct-password")
+    result = await mock_client.auth.login("user@example.com", "correct-password")
 
     # Assert
     assert isinstance(result, TokenResponse)
@@ -92,19 +109,24 @@ async def test_login_success(mock_client: AsyncClient) -> None:
     # Assert store token
     assert mock_client._access_token == TOKEN_PAYLOAD["access_token"]
     assert mock_client._token_expires_at is not None
-    assert mock_client._credentials == {"email": "user@example.com", "password": "correct-password"}
+    assert mock_client._credentials == {
+        "email": "user@example.com",
+        "password": "correct-password",
+    }
     assert mock_client._credentials_type == "login"
 
 
 @pytest.mark.asyncio
-async def test_login_wrong_credentials(unauthorized_transport: AsyncMockTransport) -> None:
+async def test_login_wrong_credentials(
+    unauthorized_transport: AsyncMockTransport,
+) -> None:
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.AsyncClient(transport=unauthorized_transport)
 
     # Act & Assert
     with pytest.raises(AuthenticationError, match="Invalid credentials") as exc_info:
-        await c.login("user@example.com", "wrong-password")
+        await c.auth.login("user@example.com", "wrong-password")
     assert exc_info.value.status_code == 401
 
 
@@ -116,19 +138,21 @@ async def test_login_server_error(server_error_transport: AsyncMockTransport) ->
 
     # Act & Assert
     with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
-        await c.login("user@example.com", "password")
+        await c.auth.login("user@example.com", "password")
     assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio
-async def test_login_network_error(connect_error_transport: AsyncRaisingTransport) -> None:
+async def test_login_network_error(
+    connect_error_transport: AsyncRaisingTransport,
+) -> None:
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.AsyncClient(transport=connect_error_transport)
 
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error"):
-        await c.login("user@example.com", "password")
+        await c.auth.login("user@example.com", "password")
 
 
 @pytest.mark.asyncio
@@ -139,7 +163,7 @@ async def test_login_api_error(api_error_transport):
 
     # Act & Assert
     with pytest.raises(APIError, match="Too many redirect") as exc_info:
-        await c.login("user@example.com", "correct-password")
+        await c.auth.login("user@example.com", "correct-password")
     assert exc_info.value.status_code == 310
 
 
@@ -149,7 +173,7 @@ async def test_login_empty_email(mock_client: AsyncClient) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="email must not be empty"):
-        await mock_client.login("", "password")
+        await mock_client.auth.login("", "password")
 
 
 @pytest.mark.asyncio
@@ -158,7 +182,7 @@ async def test_login_empty_password(mock_client: AsyncClient) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="password must not be empty"):
-        await mock_client.login("user@example.com", "")
+        await mock_client.auth.login("user@example.com", "")
 
 
 @pytest.mark.asyncio
@@ -167,7 +191,7 @@ async def test_login_whitespace_email(mock_client: AsyncClient) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="email must not be empty"):
-        await mock_client.login("   ", "password")
+        await mock_client.auth.login("   ", "password")
 
 
 @pytest.mark.asyncio
@@ -176,17 +200,18 @@ async def test_login_whitespace_password(mock_client: AsyncClient) -> None:
 
     # Act & Assert
     with pytest.raises(ValueError, match="password must not be empty"):
-        await mock_client.login("user@example.com", "   ")
+        await mock_client.auth.login("user@example.com", "   ")
 
 
 # --- get_access_token ---
+
 
 @pytest.mark.asyncio
 async def test_get_access_token_success(mock_client: AsyncClient) -> None:
     # Arrange: mock_client fixture provides an AsyncClient backed by a 200 success transport
 
     # Act
-    result = await mock_client.get_access_token("admin", "secret")
+    result = await mock_client.auth.get_access_token("admin", "secret")
 
     # Assert
     assert isinstance(result, TokenResponse)
@@ -195,42 +220,48 @@ async def test_get_access_token_success(mock_client: AsyncClient) -> None:
     assert mock_client._access_token == TOKEN_PAYLOAD["access_token"]
     assert mock_client._is_token_expiring_soon is not None
     assert mock_client._credentials == {"client_id": "admin", "client_secret": "secret"}
-    assert mock_client._credentials_type == 'client'
+    assert mock_client._credentials_type == "client"
 
 
 @pytest.mark.asyncio
-async def test_get_access_token_wrong_credentials(unauthorized_transport: AsyncMockTransport) -> None:
+async def test_get_access_token_wrong_credentials(
+    unauthorized_transport: AsyncMockTransport,
+) -> None:
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.AsyncClient(transport=unauthorized_transport)
 
     # Act & Assert
     with pytest.raises(AuthenticationError, match="Invalid credentials") as exc_info:
-        await c.get_access_token("wrong-id", "wrong-secret")
+        await c.auth.get_access_token("wrong-id", "wrong-secret")
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_get_access_token_server_error(server_error_transport: AsyncMockTransport) -> None:
+async def test_get_access_token_server_error(
+    server_error_transport: AsyncMockTransport,
+) -> None:
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.AsyncClient(transport=server_error_transport)
 
     # Act & Assert
     with pytest.raises(ServerError, match="Service Unavailable") as exc_info:
-        await c.get_access_token("admin", "secret")
+        await c.auth.get_access_token("admin", "secret")
     assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio
-async def test_get_access_token_network_error(connect_error_transport: AsyncRaisingTransport) -> None:
+async def test_get_access_token_network_error(
+    connect_error_transport: AsyncRaisingTransport,
+) -> None:
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.AsyncClient(transport=connect_error_transport)
 
     # Act & Assert
     with pytest.raises(NetworkError, match="Network error"):
-        await c.get_access_token("admin", "secret")
+        await c.auth.get_access_token("admin", "secret")
 
 
 @pytest.mark.asyncio
@@ -241,7 +272,7 @@ async def test_get_access_token_api_error(api_error_transport):
 
     # Act & Assert
     with pytest.raises(APIError, match="Too many redirect") as exc_info:
-        await c.get_access_token("admin", "secret")
+        await c.auth.get_access_token("admin", "secret")
     assert exc_info.value.status_code == 310
 
 
@@ -251,7 +282,7 @@ async def test_get_access_token_empty_client_id(mock_client: AsyncClient) -> Non
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_id must not be empty"):
-        await mock_client.get_access_token("", "secret")
+        await mock_client.auth.get_access_token("", "secret")
 
 
 @pytest.mark.asyncio
@@ -260,7 +291,7 @@ async def test_get_access_token_empty_client_secret(mock_client: AsyncClient) ->
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
-        await mock_client.get_access_token("client-id", "")
+        await mock_client.auth.get_access_token("client-id", "")
 
 
 @pytest.mark.asyncio
@@ -269,26 +300,30 @@ async def test_get_access_token_whitespace_client_id(mock_client: AsyncClient) -
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_id must not be empty"):
-        await mock_client.get_access_token("   ", "secret")
+        await mock_client.auth.get_access_token("   ", "secret")
 
 
 @pytest.mark.asyncio
-async def test_get_access_token_whitespace_client_secret(mock_client: AsyncClient) -> None:
+async def test_get_access_token_whitespace_client_secret(
+    mock_client: AsyncClient,
+) -> None:
     # Arrange: mock_client fixture provides a ready-to-use AsyncClient
 
     # Act & Assert
     with pytest.raises(ValueError, match="client_secret must not be empty"):
-        await mock_client.get_access_token("client-id", "   ")
+        await mock_client.auth.get_access_token("client-id", "   ")
 
 
 # --- is_token_valid ---
 @pytest.mark.asyncio
-async def test_is_token_valid_returns_true_on_valid_token(mock_client: AsyncClient) -> None:
+async def test_is_token_valid_returns_true_on_valid_token(
+    mock_client: AsyncClient,
+) -> None:
     # Arrange
     claims = {"sub": "user-123", "iss": "https://auth.example.com"}
     with patch.object(mock_client._jwt_verifier, "verify_async", return_value=claims):
         # Act
-        result = await mock_client.is_token_valid("any.jwt.token")
+        result = await mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is True
@@ -298,10 +333,18 @@ async def test_is_token_valid_returns_true_on_valid_token(mock_client: AsyncClie
     "exc,exc_name",
     [
         (jwt.ExpiredSignatureError("Token has expired"), "ExpiredSignatureError"),
-        (jwt.InvalidSignatureError("Signature verification failed"), "InvalidSignatureError"),
+        (
+            jwt.InvalidSignatureError("Signature verification failed"),
+            "InvalidSignatureError",
+        ),
         (jwt.DecodeError("Not enough segments"), "DecodeError"),
         (jwt.MissingRequiredClaimError("iss"), "MissingRequiredClaimError"),
-        (jwt.InvalidIssuerError("Token issuer 'https://evil.com/' is not in the allowed issuers list"), "InvalidIssuerError"),
+        (
+            jwt.InvalidIssuerError(
+                "Token issuer 'https://evil.com/' is not in the allowed issuers list"
+            ),
+            "InvalidIssuerError",
+        ),
     ],
     ids=["expired", "invalid_signature", "malformed", "missing_iss", "invalid_issuer"],
 )
@@ -309,11 +352,12 @@ async def test_is_token_valid_logs_warning_on_invalid_token(
     mock_client: AsyncClient, exc: jwt.InvalidTokenError, exc_name: str, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python import async_client
+    from visionai_sdk_python.auth import _mixin
+
     with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
         # Act
-        with caplog.at_level("WARNING", logger=async_client.__name__):
-            result = await mock_client.is_token_valid("any.jwt.token")
+        with caplog.at_level("WARNING", logger=_mixin.__name__):
+            result = await mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is False
@@ -332,12 +376,13 @@ async def test_is_token_valid_logs_error_on_jwks_failure(
     mock_client: AsyncClient, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python import async_client
+    from visionai_sdk_python.auth import _mixin
+
     exc = jwt.PyJWKClientError("Failed to fetch JWKS from endpoint")
     with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
         # Act
-        with caplog.at_level("ERROR", logger=async_client.__name__):
-            result = await mock_client.is_token_valid("any.jwt.token")
+        with caplog.at_level("ERROR", logger=_mixin.__name__):
+            result = await mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is False
@@ -355,12 +400,15 @@ async def test_is_token_valid_logs_error_on_jwks_discovery_failure(
     mock_client: AsyncClient, caplog
 ) -> None:
     # Arrange
-    from visionai_sdk_python import async_client
-    exc = JwksDiscoveryError("Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known")
+    from visionai_sdk_python.auth import _mixin
+
+    exc = JwksDiscoveryError(
+        "Failed to fetch OIDC discovery document from 'https://auth.example.com/.well-known/openid-configuration': [Errno -2] Name or service not known"
+    )
     with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
         # Act
-        with caplog.at_level("ERROR", logger=async_client.__name__):
-            result = await mock_client.is_token_valid("any.jwt.token")
+        with caplog.at_level("ERROR", logger=_mixin.__name__):
+            result = await mock_client.auth.is_token_valid("any.jwt.token")
 
     # Assert
     assert result is False
@@ -374,27 +422,32 @@ async def test_is_token_valid_logs_error_on_jwks_discovery_failure(
 
 @pytest.mark.asyncio
 async def test_is_token_valid_propagates_unexpected_errors(
-    mock_client: AsyncClient
+    mock_client: AsyncClient,
 ) -> None:
     # Arrange - Simulate a programming error (e.g., AttributeError)
     exc = AttributeError("'NoneType' object has no attribute 'verify'")
     with patch.object(mock_client._jwt_verifier, "verify_async", side_effect=exc):
         # Act & Assert - Unexpected exceptions should propagate
-        with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'verify'"):
-            await mock_client.is_token_valid("any.jwt.token")
+        with pytest.raises(
+            AttributeError, match="'NoneType' object has no attribute 'verify'"
+        ):
+            await mock_client.auth.is_token_valid("any.jwt.token")
 
 
 # --- Resource cleanup ---
 
+
 @pytest.mark.asyncio
-async def test_async_client_context_manager(success_transport: AsyncMockTransport) -> None:
+async def test_async_client_context_manager(
+    success_transport: AsyncMockTransport,
+) -> None:
     """Test that async client properly closes resources when used as context manager."""
     # Arrange
     async with AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL) as client:
         client._client = httpx.AsyncClient(transport=success_transport)
 
         # Act
-        result = await client.login("user@example.com", "password")
+        result = await client.auth.login("user@example.com", "password")
 
         # Assert: login returned a valid token while the client is open
         assert isinstance(result, TokenResponse)
@@ -404,14 +457,16 @@ async def test_async_client_context_manager(success_transport: AsyncMockTranspor
 
 
 @pytest.mark.asyncio
-async def test_async_client_explicit_close(success_transport: AsyncMockTransport) -> None:
+async def test_async_client_explicit_close(
+    success_transport: AsyncMockTransport,
+) -> None:
     """Test that async client can be explicitly closed."""
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
     c._client = httpx.AsyncClient(transport=success_transport)
 
     # Act
-    result = await c.login("user@example.com", "password")
+    result = await c.auth.login("user@example.com", "password")
 
     # Assert: client is still open after a successful call
     assert isinstance(result, TokenResponse)
@@ -425,7 +480,9 @@ async def test_async_client_explicit_close(success_transport: AsyncMockTransport
 
 
 @pytest.mark.asyncio
-async def test_async_client_close_idempotent(success_transport: AsyncMockTransport) -> None:
+async def test_async_client_close_idempotent(
+    success_transport: AsyncMockTransport,
+) -> None:
     """Test that calling close() multiple times is safe."""
     # Arrange
     c = AsyncClient(auth_url=AUTH_URL, vlm_url=VLM_URL)
@@ -440,6 +497,7 @@ async def test_async_client_close_idempotent(success_transport: AsyncMockTranspo
 
 
 # --- chat / get_chat shared fixtures & helpers ---
+
 
 def _make_vlm_async_client(response_body: dict) -> AsyncClient:
     """Return an AsyncClient whose transport always returns response_body and that is authenticated."""
@@ -458,18 +516,23 @@ def _make_vlm_async_client(response_body: dict) -> AsyncClient:
 
 # --- chat ---
 
+
 @pytest.mark.asyncio
-async def test_chat_raises_authentication_error_when_not_authenticated(mock_client: AsyncClient) -> None:
+async def test_chat_raises_authentication_error_when_not_authenticated(
+    mock_client: AsyncClient,
+) -> None:
     # Arrange: client has no token
     nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
 
     # Act & Assert: chat() raises AuthenticationError
     with pytest.raises(AuthenticationError, match="Not authenticated"):
-        await mock_client.chat(nim)
+        await mock_client.vlm.chat(nim)
 
 
 @pytest.mark.asyncio
-async def test_chat_raises_authentication_error_when_token_expired_without_credentials(mock_client: AsyncClient) -> None:
+async def test_chat_raises_authentication_error_when_token_expired_without_credentials(
+    mock_client: AsyncClient,
+) -> None:
     # Arrange: client has token but no credentials, and token is expiring
     mock_client._access_token = "fake_token"
     mock_client._credentials = None
@@ -478,7 +541,7 @@ async def test_chat_raises_authentication_error_when_token_expired_without_crede
     with patch.object(mock_client, "_is_token_expiring_soon", return_value=True):
         nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
         with pytest.raises(AuthenticationError, match="no credentials available"):
-            mock_client.chat(nim)
+            await mock_client.vlm.chat(nim)
 
 
 @pytest.mark.asyncio
@@ -489,64 +552,31 @@ async def test_chat_auto_refreshes_token_when_expiring_soon() -> None:
 
     # Act: call chat() when token is expiring
     with patch.object(c, "_is_token_expiring_soon", return_value=True):
-        with patch.object(c, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)) as mock_login:
-            await c.chat(nim)
+        with patch.object(
+            c.auth, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)
+        ) as mock_login:
+            await c.vlm.chat(nim)
 
             # Assert: login was called to refresh token
             mock_login.assert_called_once_with(
-                email="test@example.com",
-                password="password"
+                email="test@example.com", password="password"
             )
 
 
 @pytest.mark.asyncio
-async def test_chat_raises_authentication_error_when_not_authenticated(mock_client: AsyncClient) -> None:
-    # Arrange: client has no token
-    nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
-
-    # Act & Assert: chat() raises AuthenticationError
-    with pytest.raises(AuthenticationError, match="Not authenticated"):
-        await mock_client.chat(nim)
-
-
-@pytest.mark.asyncio
-async def test_chat_raises_authentication_error_when_token_expired_without_credentials(mock_client: AsyncClient) -> None:
-    # Arrange: client has token but no credentials, and token is expiring
-    mock_client._access_token = "fake_token"
-    mock_client._credentials = None
-
-    # Act & Assert: chat() raises AuthenticationError when token expires
-    with patch.object(mock_client, "_is_token_expiring_soon", return_value=True):
-        nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
-        with pytest.raises(AuthenticationError, match="no credentials available"):
-            await mock_client.chat(nim)
-
-
-@pytest.mark.asyncio
-async def test_chat_auto_refreshes_token_when_expiring_soon() -> None:
-    # Arrange: client with expiring token and valid credentials
-    c = _make_vlm_async_client(NORMAL_COMPLETED_RESPONSE)
-    nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
-
-    # Act: call chat() when token is expiring
-    with patch.object(c, "_is_token_expiring_soon", return_value=True):
-        with patch.object(c, "login", return_value=TokenResponse(**TOKEN_PAYLOAD)) as mock_login:
-            await c.chat(nim)
-
-            # Assert: login was called to refresh token
-            mock_login.assert_called_once_with(
-                email="test@example.com",
-                password="password"
-            )
-
-
-@pytest.mark.asyncio
-async def test_chat_invalid_dict_payload_raises_validation_error(mock_client: AsyncClient) -> None:
+async def test_chat_invalid_dict_payload_raises_validation_error(
+    mock_client: AsyncClient,
+) -> None:
     # Arrange: client is authenticated, payload missing required fields
-    mock_client._store_token("valid.jwt.token", 3600, {"email": "test@example.com", "password": "password"}, "login")
+    mock_client._store_token(
+        "valid.jwt.token",
+        3600,
+        {"email": "test@example.com", "password": "password"},
+        "login",
+    )
     # Act & Assert
     with pytest.raises(ValidationError):
-        await mock_client.chat({"bad_field": "value"})
+        await mock_client.vlm.chat({"bad_field": "value"})
 
 
 @pytest.mark.asyncio
@@ -556,7 +586,7 @@ async def test_chat_with_valid_nim_model_returns_normal_model() -> None:
     nim = NIMRequestModel(**VALID_NIM_PAYLOAD)
 
     # Act
-    result = await c.chat(nim)
+    result = await c.vlm.chat(nim)
 
     # Assert
     assert isinstance(result, ResponseNormalModel)
@@ -564,11 +594,15 @@ async def test_chat_with_valid_nim_model_returns_normal_model() -> None:
     assert result.chat_id == "id-001"
 
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (NORMAL_PENDING_RESPONSE,   "pending"),
-    (NORMAL_RUNNING_RESPONSE,   "running"),
-    (NORMAL_COMPLETED_RESPONSE, "completed"),
-], ids=["pending", "running", "completed"])
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (NORMAL_PENDING_RESPONSE, "pending"),
+        (NORMAL_RUNNING_RESPONSE, "running"),
+        (NORMAL_COMPLETED_RESPONSE, "completed"),
+    ],
+    ids=["pending", "running", "completed"],
+)
 @pytest.mark.asyncio
 async def test_chat_returns_normal_model_for_non_error_statuses(
     response_body: dict, expected_status: str
@@ -577,17 +611,21 @@ async def test_chat_returns_normal_model_for_non_error_statuses(
     c = _make_vlm_async_client(response_body)
 
     # Act
-    result = await c.chat(VALID_NIM_PAYLOAD)
+    result = await c.vlm.chat(VALID_NIM_PAYLOAD)
 
     # Assert
     assert isinstance(result, ResponseNormalModel)
     assert result.status == expected_status
 
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (ERROR_FAILED_RESPONSE,  "failed"),
-    (ERROR_TIMEOUT_RESPONSE, "timeout"),
-], ids=["failed", "timeout"])
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (ERROR_FAILED_RESPONSE, "failed"),
+        (ERROR_TIMEOUT_RESPONSE, "timeout"),
+    ],
+    ids=["failed", "timeout"],
+)
 @pytest.mark.asyncio
 async def test_chat_returns_error_model_for_error_statuses(
     response_body: dict, expected_status: str
@@ -596,7 +634,7 @@ async def test_chat_returns_error_model_for_error_statuses(
     c = _make_vlm_async_client(response_body)
 
     # Act
-    result = await c.chat(VALID_NIM_PAYLOAD)
+    result = await c.vlm.chat(VALID_NIM_PAYLOAD)
 
     # Assert
     assert isinstance(result, ResponseErrorModel)
@@ -605,11 +643,16 @@ async def test_chat_returns_error_model_for_error_statuses(
 
 # --- get_chat ---
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (NORMAL_PENDING_RESPONSE,   "pending"),
-    (NORMAL_RUNNING_RESPONSE,   "running"),
-    (NORMAL_COMPLETED_RESPONSE, "completed"),
-], ids=["pending", "running", "completed"])
+
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (NORMAL_PENDING_RESPONSE, "pending"),
+        (NORMAL_RUNNING_RESPONSE, "running"),
+        (NORMAL_COMPLETED_RESPONSE, "completed"),
+    ],
+    ids=["pending", "running", "completed"],
+)
 @pytest.mark.asyncio
 async def test_get_chat_returns_normal_model_for_non_error_statuses(
     response_body: dict, expected_status: str
@@ -618,7 +661,7 @@ async def test_get_chat_returns_normal_model_for_non_error_statuses(
     c = _make_vlm_async_client(response_body)
 
     # Act
-    result = await c.get_chat("id-001")
+    result = await c.vlm.get_chat("id-001")
 
     # Assert
     assert isinstance(result, ResponseNormalModel)
@@ -626,10 +669,14 @@ async def test_get_chat_returns_normal_model_for_non_error_statuses(
     assert result.chat_id == "id-001"
 
 
-@pytest.mark.parametrize("response_body,expected_status", [
-    (ERROR_FAILED_RESPONSE,  "failed"),
-    (ERROR_TIMEOUT_RESPONSE, "timeout"),
-], ids=["failed", "timeout"])
+@pytest.mark.parametrize(
+    "response_body,expected_status",
+    [
+        (ERROR_FAILED_RESPONSE, "failed"),
+        (ERROR_TIMEOUT_RESPONSE, "timeout"),
+    ],
+    ids=["failed", "timeout"],
+)
 @pytest.mark.asyncio
 async def test_get_chat_returns_error_model_for_error_statuses(
     response_body: dict, expected_status: str
@@ -638,7 +685,7 @@ async def test_get_chat_returns_error_model_for_error_statuses(
     c = _make_vlm_async_client(response_body)
 
     # Act
-    result = await c.get_chat("id-001")
+    result = await c.vlm.get_chat("id-001")
 
     # Assert
     assert isinstance(result, ResponseErrorModel)

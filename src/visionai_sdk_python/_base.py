@@ -1,7 +1,10 @@
 import time
-import httpx
 from typing import Literal
 
+import httpx
+
+from ._jwt_verifier import JwtVerifier
+from .constants import resolve_allowed_issuers
 from .exceptions import (
     APIError,
     AuthenticationError,
@@ -9,8 +12,6 @@ from .exceptions import (
     PermissionDeniedError,
     ServerError,
 )
-from ._jwt_verifier import JwtVerifier
-from .constants import resolve_allowed_issuers
 
 
 class _BaseClient:
@@ -53,7 +54,11 @@ class _BaseClient:
         self.timeout = timeout
         self.max_connections = max_connections
         self.max_keepalive_connections = max_keepalive_connections
-        resolved_issuers: list[str] = allowed_issuers if allowed_issuers is not None else resolve_allowed_issuers(self.auth_url)
+        resolved_issuers: list[str] = (
+            allowed_issuers
+            if allowed_issuers is not None
+            else resolve_allowed_issuers(self.auth_url)
+        )
         self._jwt_verifier = JwtVerifier(
             auth_url=self.auth_url,
             allowed_issuers=resolved_issuers,
@@ -78,7 +83,6 @@ class _BaseClient:
         if not access_token:
             raise ValueError("access_token must not be empty")
         return {"Authorization": f"Bearer {access_token}"}
-
 
     def _store_token(
         self,
@@ -164,7 +168,9 @@ class _BaseClient:
         else:
             effective_expires_in = jwt_expires_in
 
-        self._store_token(access_token, effective_expires_in, credentials=None, credentials_type=None)
+        self._store_token(
+            access_token, effective_expires_in, credentials=None, credentials_type=None
+        )
 
     @staticmethod
     def _handle_response(response: httpx.Response) -> httpx.Response:
@@ -199,5 +205,5 @@ class _BaseClient:
                 raise ClientError(status, detail) from e
             if 500 <= status < 600:
                 raise ServerError(status, detail) from e
-            raise APIError(status, detail)
+            raise APIError(status, detail) from e
         return response

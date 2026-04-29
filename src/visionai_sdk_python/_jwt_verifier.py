@@ -22,6 +22,7 @@ def _get_insecure_context() -> ssl.SSLContext:
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
+
 class JwtVerifier:
     """Stateful JWT verifier that handles OIDC discovery and JWKS key fetching.
 
@@ -38,7 +39,9 @@ class JwtVerifier:
         timeout: float = 10.0,
     ) -> None:
         self._auth_url = auth_url
-        self._allowed_issuers: frozenset[str] = frozenset(allowed_issuers) if allowed_issuers else frozenset()
+        self._allowed_issuers: frozenset[str] = (
+            frozenset(allowed_issuers) if allowed_issuers else frozenset()
+        )
         self._verify_ssl = verify_ssl
         self._timeout = timeout
         # issuer -> (jwks_uri, expire_at)
@@ -155,7 +158,9 @@ class JwtVerifier:
 
         discovery_url = f"{issuer.rstrip('/')}{_OIDC_DISCOVERY_PATH}"
         try:
-            async with httpx.AsyncClient(verify=self._verify_ssl, timeout=self._timeout) as http:
+            async with httpx.AsyncClient(
+                verify=self._verify_ssl, timeout=self._timeout
+            ) as http:
                 resp = await http.get(discovery_url)
                 resp.raise_for_status()
                 jwks_uri: str = resp.json()["jwks_uri"]
@@ -184,7 +189,9 @@ class JwtVerifier:
         issuer = self._get_issuer(access_token)
         self._validate_issuer(issuer)
         jwks_uri = self._fetch_jwks_uri_sync(issuer)
-        signing_key = self._get_jwks_client(jwks_uri).get_signing_key_from_jwt(access_token)
+        signing_key = self._get_jwks_client(jwks_uri).get_signing_key_from_jwt(
+            access_token
+        )
         return self._decode_verified(access_token, signing_key.key)
 
     async def verify_async(self, access_token: str) -> dict:

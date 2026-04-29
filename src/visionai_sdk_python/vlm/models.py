@@ -1,17 +1,13 @@
-from pydantic import AnyHttpUrl, BaseModel, Field
+"""VLM request and response models."""
+
 from typing import Literal
 
-class TokenResponse(BaseModel):
-    """Response model for authentication token endpoints.
-
-    Used by both /api/users/jwt and /api/users/client-token endpoints.
-    """
-    access_token: str = Field(..., description="JWT access token")
-    expires_in: int = Field(..., description="Token expiration time in seconds")
-    token_type: str = Field(..., description="Token type (e.g., 'Bearer')")
+from pydantic import AnyHttpUrl, BaseModel
 
 
 class NIMRequestModel(BaseModel):
+    """Request model for VLM inference."""
+
     img: str | list[str]
     prompt: str
     temperature: float | None = 0.2
@@ -27,12 +23,16 @@ class NIMRequestModel(BaseModel):
 
 
 class ResponseNormalModel(BaseModel):
+    """Normal response model for VLM inference."""
+
     chat_id: str
     status: Literal["pending", "running", "completed"]
     message: str | None = None
 
 
 class ResponseErrorModel(BaseModel):
+    """Error response model for VLM inference."""
+
     chat_id: str
     status: Literal["failed", "timeout"]
     error: str
