@@ -97,6 +97,41 @@ class TestExceptionTransparency:
                 ):
                     pass
 
+    async def test_connection_error_catchable_via_shim_namespace(self):
+        """Regression test: code that does `from visionai_sdk_python import
+        aiohttp` and then `except aiohttp.ClientConnectorError:` must still
+        work -- this failed with AttributeError before the shim re-exported
+        aiohttp's public API."""
+        async with shim.ClientSession() as session:
+            with pytest.raises(shim.ClientConnectorError):
+                async with session.get(
+                    "http://127.0.0.1:1/",
+                    timeout=shim.ClientTimeout(total=2),
+                ):
+                    pass
+
+
+class TestReExportsUnderlyingLibrary:
+    """Regression tests for attribute access through the shim's own
+    namespace -- code referencing aiohttp.ClientTimeout,
+    aiohttp.ClientConnectorError, etc. via the post-import-swap name must
+    keep working."""
+
+    def test_client_timeout_reexported(self):
+        assert shim.ClientTimeout is real_aiohttp.ClientTimeout
+
+    def test_client_connector_error_reexported(self):
+        assert shim.ClientConnectorError is real_aiohttp.ClientConnectorError
+
+    async def test_isinstance_against_shim_client_session(self):
+        """Regression test for the exact bug Codex found: ClientSession
+        must be a real type so isinstance(session, aiohttp.ClientSession)
+        -- checked against the *shim's own* name, as real calling code
+        would after the import swap -- doesn't raise TypeError."""
+        async with shim.ClientSession() as session:
+            assert isinstance(session, shim.ClientSession)
+            assert isinstance(session, real_aiohttp.ClientSession)
+
 
 class TestMissingDependency:
     def test_import_error_message_mentions_extra(self, monkeypatch):
