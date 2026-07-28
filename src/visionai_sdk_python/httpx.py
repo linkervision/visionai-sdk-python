@@ -24,44 +24,39 @@ Note: this module intentionally shares its name with the third-party
 this module -- a deliberate naming choice, not a mistake, though it can
 confuse IDEs/type-checkers that don't model that distinction.
 
-``Client``/``AsyncClient`` override ``build_request()`` rather than
-``request()``: ``build_request()`` is the single choke point the real
-``httpx.Client``/``AsyncClient`` use to construct every outgoing
-request, including from ``.stream()`` -- which does not go through
-``.request()`` -- so overriding it here covers every public method
-(``.request()``, ``.get()``, ``.post()``, ``.stream()``, ...) with one
-override.
+``Client``/``AsyncClient`` override ``send()`` rather than
+``build_request()``/``request()``: ``send()`` is the single choke point
+the real ``httpx.Client``/``AsyncClient`` use to actually transmit every
+request, reached by ``.request()``, ``.get()``, ``.post()``, ``.stream()``
+-- and also by a caller who builds a ``Request`` manually (or via
+``build_request()``) and calls ``client.send(request)`` directly, a
+supported public workflow that ``build_request()`` alone would miss
+entirely. By the time a request reaches ``send()``, ``httpx`` has already
+merged the client's own default headers with any per-call headers, so a
+single presence check there covers both cases with one override.
 """
 
 from typing import Any
 
 import httpx as _httpx
 
-from ._source_header import merge_source_headers
+from ._source_header import inject_source_header, merge_source_headers
 
 
 class Client(_httpx.Client):
     """``httpx.Client`` subclass that auto-injects ``X-Request-Source``."""
 
-    def build_request(
-        self, method: str, url: str, *args: Any, **kwargs: Any
-    ) -> _httpx.Request:
-        kwargs["headers"] = merge_source_headers(
-            kwargs.get("headers"), default_headers=self.headers
-        )
-        return super().build_request(method, url, *args, **kwargs)
+    def send(self, request: _httpx.Request, **kwargs: Any) -> _httpx.Response:
+        inject_source_header(request.headers)
+        return super().send(request, **kwargs)
 
 
 class AsyncClient(_httpx.AsyncClient):
     """``httpx.AsyncClient`` subclass that auto-injects ``X-Request-Source``."""
 
-    def build_request(
-        self, method: str, url: str, *args: Any, **kwargs: Any
-    ) -> _httpx.Request:
-        kwargs["headers"] = merge_source_headers(
-            kwargs.get("headers"), default_headers=self.headers
-        )
-        return super().build_request(method, url, *args, **kwargs)
+    async def send(self, request: _httpx.Request, **kwargs: Any) -> _httpx.Response:
+        inject_source_header(request.headers)
+        return await super().send(request, **kwargs)
 
 
 def request(method: str, url: str, *args: Any, **kwargs: Any) -> _httpx.Response:

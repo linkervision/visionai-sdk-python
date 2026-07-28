@@ -33,13 +33,27 @@ class TestClientHeaderInjection:
 
     def test_stream_injects_header(self, monkeypatch):
         """.stream() bypasses .request() entirely; this proves the
-        build_request() override still covers it."""
+        send() override still covers it."""
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
         captured = {}
 
         client = shim.Client(transport=_capturing_transport(captured))
         with client.stream("GET", "http://example.test/path") as response:
             response.read()
+
+        assert captured["headers"]["x-request-source"] == "stream-agent"
+
+    def test_send_prebuilt_request_injects_header(self, monkeypatch):
+        """Regression test: client.send(request) with a manually built
+        Request is a supported public httpx workflow that bypasses
+        request()/build_request() entirely -- it must still get the
+        header, since Client overrides send(), not build_request()."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        captured = {}
+
+        client = shim.Client(transport=_capturing_transport(captured))
+        req = real_httpx.Request("GET", "http://example.test/path")
+        client.send(req)
 
         assert captured["headers"]["x-request-source"] == "stream-agent"
 
@@ -96,6 +110,16 @@ class TestAsyncClientHeaderInjection:
         client = shim.AsyncClient(transport=_capturing_transport(captured))
         async with client.stream("GET", "http://example.test/path") as response:
             await response.aread()
+
+        assert captured["headers"]["x-request-source"] == "web-server"
+
+    async def test_send_prebuilt_request_injects_header(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "web-server")
+        captured = {}
+
+        client = shim.AsyncClient(transport=_capturing_transport(captured))
+        req = real_httpx.Request("GET", "http://example.test/path")
+        await client.send(req)
 
         assert captured["headers"]["x-request-source"] == "web-server"
 
