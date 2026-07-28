@@ -50,7 +50,9 @@ class AuthResource(AuthMixin):
         # I/O operation (sync)
         response = self._sdk_client._request(
             "POST",
-            self._sdk_client._build_url(self._sdk_client.auth_url, AuthEndpoint.CLIENT_TOKEN),
+            self._sdk_client._build_url(
+                self._sdk_client.auth_url, AuthEndpoint.CLIENT_TOKEN
+            ),
             json=self._prepare_client_token_request(client_id, client_secret),
         )
 
