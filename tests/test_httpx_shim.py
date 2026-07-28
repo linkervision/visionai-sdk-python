@@ -63,6 +63,21 @@ class TestClientHeaderInjection:
 
         assert SOURCE_HEADER.lower() not in captured["headers"]
 
+    def test_respects_constructor_level_default_header(self, monkeypatch):
+        """Regression test: a caller who configures Client(headers={...})
+        at construction time, rather than per-call, must not have that
+        default silently overwritten by the env value."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        captured = {}
+
+        client = shim.Client(
+            transport=_capturing_transport(captured),
+            headers={"X-Request-Source": "my-explicit-service"},
+        )
+        client.get("http://example.test/path")
+
+        assert captured["headers"]["x-request-source"] == "my-explicit-service"
+
 
 class TestAsyncClientHeaderInjection:
     async def test_get_injects_header(self, monkeypatch):
@@ -139,3 +154,29 @@ class TestExceptionTransparency:
         )
         with pytest.raises(real_httpx.ConnectError):
             shim.get("http://example.test/path")
+
+    def test_connection_error_catchable_via_shim_namespace(self):
+        """Regression test: code that does `from visionai_sdk_python import
+        httpx` and then `except httpx.ConnectError:` (or isinstance checks
+        against it) must still work -- this failed with AttributeError
+        before the shim re-exported httpx's public API."""
+        client = shim.Client(
+            transport=_raising_transport(shim.ConnectError("Connection refused"))
+        )
+        with pytest.raises(shim.ConnectError):
+            client.get("http://example.test/path")
+
+
+class TestReExportsUnderlyingLibrary:
+    """Regression tests for attribute access through the shim's own
+    namespace -- code referencing httpx.ConnectError, httpx.Timeout, etc.
+    via the post-import-swap name must keep working."""
+
+    def test_connect_error_reexported(self):
+        assert shim.ConnectError is real_httpx.ConnectError
+
+    def test_timeout_reexported(self):
+        assert shim.Timeout is real_httpx.Timeout
+
+    def test_response_reexported(self):
+        assert shim.Response is real_httpx.Response

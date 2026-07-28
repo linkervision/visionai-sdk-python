@@ -46,7 +46,9 @@ class Client(_httpx.Client):
     def build_request(
         self, method: str, url: str, *args: Any, **kwargs: Any
     ) -> _httpx.Request:
-        kwargs["headers"] = merge_source_headers(kwargs.get("headers"))
+        kwargs["headers"] = merge_source_headers(
+            kwargs.get("headers"), default_headers=self.headers
+        )
         return super().build_request(method, url, *args, **kwargs)
 
 
@@ -56,7 +58,9 @@ class AsyncClient(_httpx.AsyncClient):
     def build_request(
         self, method: str, url: str, *args: Any, **kwargs: Any
     ) -> _httpx.Request:
-        kwargs["headers"] = merge_source_headers(kwargs.get("headers"))
+        kwargs["headers"] = merge_source_headers(
+            kwargs.get("headers"), default_headers=self.headers
+        )
         return super().build_request(method, url, *args, **kwargs)
 
 
@@ -103,3 +107,13 @@ def delete(url: str, *args: Any, **kwargs: Any) -> _httpx.Response:
 def stream(method: str, url: str, *args: Any, **kwargs: Any) -> Any:
     kwargs["headers"] = merge_source_headers(kwargs.get("headers"))
     return _httpx.stream(method, url, *args, **kwargs)
+
+
+def __getattr__(name: str) -> Any:
+    """Delegate anything this module doesn't define itself to real ``httpx``.
+
+    Without this, code that references ``httpx.ConnectError``, ``httpx.Timeout``,
+    ``httpx.Response``, ``httpx.HTTPError``, etc. through this shim's namespace
+    breaks with ``AttributeError`` after the documented one-line import swap.
+    """
+    return getattr(_httpx, name)
