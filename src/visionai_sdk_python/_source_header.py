@@ -25,38 +25,65 @@ Two entry points, for two different injection points:
 
 import os
 from collections.abc import Mapping, MutableMapping
+from typing import Any
 
 SOURCE_ENV_VAR = "VISIONAI_SERVICE_SOURCE"
 SOURCE_HEADER = "X-Request-Source"
 
 
-def merge_source_headers(existing_headers: Mapping[str, str] | None) -> dict[str, str]:
-    """Merge ``X-Request-Source`` into a copy of the caller's headers.
+def merge_source_headers(existing_headers: Any) -> Any:
+    """Merge ``X-Request-Source`` into the caller's headers, if needed.
 
     The env var is read fresh on every call (a single dict lookup, not
     worth caching). If it is unset, or the caller already supplied
     ``X-Request-Source`` themselves (matched case-insensitively, since
     HTTP header names are case-insensitive but a plain dict key is not),
-    the caller's headers are returned unchanged.
+    ``existing_headers`` is returned completely untouched -- the exact
+    same object, not a copy -- so callers who passed something other than
+    a plain dict (a ``list[tuple[str, str]]`` with intentionally
+    duplicated header names, a multidict, ...) don't get silently
+    coerced into a dict and lose data on a call where this function was
+    never going to change anything anyway.
+
+    Only when an actual injection is needed does this build a new
+    object: a dict copy for ``Mapping`` input, or the input's pairs plus
+    one more pair for a non-``Mapping`` iterable of pairs. Note this
+    still collapses duplicate keys in the rare case of injecting into a
+    ``Mapping`` that itself holds duplicates (e.g. a hand-built
+    multidict) -- fully preserving that would mean reconstructing the
+    caller's exact container type, which isn't worth the complexity for
+    how unusual duplicate *request* headers are in practice.
 
     Args:
         existing_headers: The headers the caller passed to this request,
-            if any.
+            if any -- a ``Mapping``, an iterable of ``(key, value)``
+            pairs, or ``None``.
 
     Returns:
-        A new dict of headers to send, never ``None``.
+        ``existing_headers`` unchanged if nothing needs to change; a dict
+        or list of pairs with the header added otherwise; ``{}`` if
+        ``existing_headers`` was ``None`` and nothing needs to change.
     """
-    merged = dict(existing_headers) if existing_headers else {}
+    if existing_headers is None:
+        source = os.environ.get(SOURCE_ENV_VAR)
+        return {SOURCE_HEADER: source} if source else {}
+
+    pairs: list[tuple[str, str]] = (
+        list(existing_headers.items())
+        if isinstance(existing_headers, Mapping)
+        else list(existing_headers)
+    )
 
     source = os.environ.get(SOURCE_ENV_VAR)
-    if not source:
+    if not source or any(key.lower() == SOURCE_HEADER.lower() for key, _ in pairs):
+        return existing_headers
+
+    if isinstance(existing_headers, Mapping):
+        merged = dict(existing_headers)
+        merged[SOURCE_HEADER] = source
         return merged
 
-    if any(key.lower() == SOURCE_HEADER.lower() for key in merged):
-        return merged
-
-    merged[SOURCE_HEADER] = source
-    return merged
+    return [*pairs, (SOURCE_HEADER, source)]
 
 
 def inject_source_header(headers: MutableMapping[str, str]) -> None:

@@ -87,6 +87,33 @@ class TestPerRequestOverride:
         assert captured["headers"][SOURCE_HEADER] == "stream-agent"
 
 
+class TestModuleLevelRequestFunction:
+    async def test_request_injects_header(self, monkeypatch):
+        """Regression test: aiohttp.request(...) (the module-level
+        one-shot function, used without ever constructing a ClientSession)
+        must get the header too -- it fell through __getattr__ to the
+        real function, unmodified, before this shim added its own
+        wrapper."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        captured = {}
+
+        async def handler(request: web.Request) -> web.Response:
+            captured["headers"] = dict(request.headers)
+            return web.Response(text="ok")
+
+        app = web.Application()
+        app.router.add_get("/path", handler)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with shim.request("GET", server.make_url("/path")) as response:
+                await response.read()
+        finally:
+            await server.close()
+
+        assert captured["headers"][SOURCE_HEADER] == "stream-agent"
+
+
 class TestExceptionTransparency:
     async def test_connection_error_propagates_untouched(self):
         async with shim.ClientSession() as session:

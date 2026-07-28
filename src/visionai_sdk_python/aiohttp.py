@@ -64,6 +64,19 @@ class ClientSession(_aiohttp.ClientSession):
         super().__init__(*args, **kwargs)
 
 
+def request(method: str, url: Any, *args: Any, **kwargs: Any) -> Any:
+    """Wrap ``aiohttp.request()``, the module-level one-shot convenience function.
+
+    Without this, ``aiohttp.request(...)`` (used without ever constructing
+    a ``ClientSession``) would fall through ``__getattr__`` to the real
+    function unchanged and never receive ``X-Request-Source`` -- unlike
+    ``ClientSession``, it isn't a class we can subclass to inject a
+    default, so it needs its own explicit wrapper here.
+    """
+    kwargs["headers"] = merge_source_headers(kwargs.get("headers"))
+    return _aiohttp.request(method, url, *args, **kwargs)
+
+
 def __getattr__(name: str) -> Any:
     """Delegate anything this module doesn't define itself to real ``aiohttp``.
 
