@@ -11,12 +11,22 @@ Python client library for VisionAI authentication and Vision Language Model (VLM
 - **VLM Inference**: Submit and poll vision-language model tasks
 - **Async Support**: Full async/await support with `AsyncClient`
 - **Type Safe**: Full type hints with Pydantic validation
+- **Drop-in HTTP Shims**: Auto-attach a service-source header to every outbound `requests`/`httpx`/`aiohttp` call by changing one import line
 
 ## Installation
 
 ```bash
 pip install visionai-sdk-python
 ```
+
+The `requests` and `aiohttp` drop-in shims (see [Drop-in HTTP Shims](#drop-in-http-shims-service-source-attribution) below) need their underlying library installed via optional extras:
+
+```bash
+pip install visionai-sdk-python[requests]
+pip install visionai-sdk-python[aiohttp]
+```
+
+`httpx` is already a core dependency, so its shim needs no extra.
 
 ## Quick Start
 
@@ -230,6 +240,69 @@ async with AsyncClient(auth_url="...", vlm_url="...") as client:
     response = await client.vlm.chat({"img": "...", "prompt": "..."})
 # client.close() called automatically
 ```
+
+## Drop-in HTTP Shims (Service Source Attribution)
+
+If a service calls VisionAI's VLM endpoints using its own `requests`/`httpx`/`aiohttp` code (rather than `Client`/`AsyncClient`), the SDK provides drop-in replacements for those libraries that automatically attach an `X-Request-Source` header to every outbound request, identifying which service/deployment made the call. This is what lets downstream systems attribute VLM token usage (and other cross-service requests) back to the calling service.
+
+Set the `VISIONAI_SERVICE_SOURCE` environment variable to the deployment's stable service name (e.g. via the Kubernetes Downward API, reading the pod's `app` label), then change only the import line:
+
+### `requests`
+
+```bash
+pip install visionai-sdk-python[requests]
+```
+
+```python
+# before
+import requests
+requests.post(url, json=payload, headers=h)
+
+# after -- only this line changes
+from visionai_sdk_python import requests
+requests.post(url, json=payload, headers=h)
+```
+
+A drop-in `Session` class is also available: `from visionai_sdk_python.requests import Session`.
+
+### `httpx`
+
+`httpx` is already a core dependency -- no extra install needed.
+
+```python
+# before
+import httpx
+httpx.post(url, json=payload, headers=h)
+
+# after -- only this line changes
+from visionai_sdk_python import httpx
+httpx.post(url, json=payload, headers=h)
+```
+
+Drop-in `Client`/`AsyncClient` classes are also available and cover every request method, including `.stream()`.
+
+### `aiohttp`
+
+```bash
+pip install visionai-sdk-python[aiohttp]
+```
+
+```python
+# before
+import aiohttp
+session = aiohttp.ClientSession()
+
+# after -- only this line changes
+from visionai_sdk_python import aiohttp
+session = aiohttp.ClientSession()
+```
+
+### Behavior
+
+- If `VISIONAI_SERVICE_SOURCE` is unset, no header is added (fully backward compatible).
+- If your own code already sets `X-Request-Source` on a request, that value is respected and never overwritten (checked case-insensitively).
+- These shims are pure passthroughs: they never catch, translate, or wrap exceptions from the underlying library. A connection failure raises the exact same `requests.exceptions.ConnectionError` / `httpx.ConnectError` / `aiohttp.ClientConnectorError` your code already handles today.
+- `visionai_sdk_python.httpx` and `visionai_sdk_python.aiohttp` intentionally share their names with the third-party `httpx`/`aiohttp` packages. This is deliberate -- Python 3's absolute imports mean `import httpx`/`import aiohttp` inside those modules resolve to the real packages, not themselves -- but it can confuse IDEs/type-checkers that don't model that distinction.
 
 ## Development
 
