@@ -42,7 +42,9 @@ class Session(_requests.Session):
     def request(
         self, method: str, url: str, *args: Any, **kwargs: Any
     ) -> _requests.Response:
-        kwargs["headers"] = merge_source_headers(kwargs.get("headers"))
+        kwargs["headers"] = merge_source_headers(
+            kwargs.get("headers"), default_headers=self.headers
+        )
         return super().request(method, url, *args, **kwargs)
 
 
@@ -84,3 +86,15 @@ def patch(url: str, *args: Any, **kwargs: Any) -> _requests.Response:
 def delete(url: str, *args: Any, **kwargs: Any) -> _requests.Response:
     kwargs["headers"] = merge_source_headers(kwargs.get("headers"))
     return _requests.delete(url, *args, **kwargs)
+
+
+def __getattr__(name: str) -> Any:
+    """Delegate anything this module doesn't define itself to real ``requests``.
+
+    Without this, code that references ``requests.exceptions.ConnectionError``,
+    ``requests.Response``, ``requests.adapters.HTTPAdapter``, etc. through this
+    shim's namespace breaks with ``AttributeError`` after the documented
+    one-line import swap -- exactly the kind of silent breakage the shim is
+    supposed to avoid.
+    """
+    return getattr(_requests, name)
