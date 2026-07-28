@@ -114,6 +114,34 @@ class TestExceptionTransparency:
         with pytest.raises(real_requests.exceptions.ConnectionError):
             shim.Session().request("GET", "http://example.test/path")
 
+    def test_connection_error_catchable_via_shim_namespace(self, monkeypatch):
+        """Regression test: code that does `from visionai_sdk_python import
+        requests` and then `except requests.exceptions.ConnectionError:`
+        must still work -- this failed with AttributeError before the shim
+        re-exported requests' public API."""
+        monkeypatch.setattr(HTTPAdapter, "send", _raise_connection_error)
+
+        with pytest.raises(shim.exceptions.ConnectionError):
+            shim.get("http://example.test/path")
+
+
+class TestReExportsUnderlyingLibrary:
+    """Regression tests for attribute access through the shim's own
+    namespace -- code referencing requests.Response, requests.adapters.*,
+    etc. via the post-import-swap name must keep working, not just code
+    that imports the real `requests` package separately."""
+
+    def test_exceptions_module_reexported(self):
+        assert (
+            shim.exceptions.ConnectionError is real_requests.exceptions.ConnectionError
+        )
+
+    def test_response_class_reexported(self):
+        assert shim.Response is real_requests.Response
+
+    def test_adapters_module_reexported(self):
+        assert shim.adapters.HTTPAdapter is real_requests.adapters.HTTPAdapter
+
 
 class TestMissingDependency:
     def test_import_error_message_mentions_extra(self, monkeypatch):
