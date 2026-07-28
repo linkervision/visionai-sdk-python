@@ -1,0 +1,135 @@
+import builtins
+import importlib
+import sys
+
+import pytest
+import requests as real_requests
+from requests.adapters import HTTPAdapter
+
+from visionai_sdk_python import requests as shim
+from visionai_sdk_python._source_header import (
+    SOURCE_ENV_VAR,
+    SOURCE_HEADER,
+    merge_source_headers,
+)
+
+
+def _raise_connection_error(self, request, *args, **kwargs):
+    raise real_requests.exceptions.ConnectionError("Connection refused")
+
+
+class TestMergeSourceHeaders:
+    def test_injects_from_env(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+
+        assert merge_source_headers(None) == {SOURCE_HEADER: "stream-agent"}
+        assert merge_source_headers({"Authorization": "Bearer x"}) == {
+            "Authorization": "Bearer x",
+            SOURCE_HEADER: "stream-agent",
+        }
+
+    def test_no_env_leaves_headers_untouched(self, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+
+        assert merge_source_headers(None) == {}
+        assert merge_source_headers({"Authorization": "Bearer x"}) == {
+            "Authorization": "Bearer x"
+        }
+
+    def test_respects_caller_supplied_value_case_insensitively(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+
+        result = merge_source_headers({"x-request-source": "web-server"})
+        assert result == {"x-request-source": "web-server"}
+
+
+class TestRequestsShimHeaderInjection:
+    def test_module_level_get_injects_header(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured["headers"] = dict(request.headers)
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        shim.get("http://example.test/path", headers={"Authorization": "Bearer x"})
+
+        assert captured["headers"][SOURCE_HEADER] == "stream-agent"
+        assert captured["headers"]["Authorization"] == "Bearer x"
+
+    def test_session_injects_header(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "web-server")
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured["headers"] = dict(request.headers)
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        session = shim.Session()
+        session.request("GET", "http://example.test/path")
+
+        assert captured["headers"][SOURCE_HEADER] == "web-server"
+
+    def test_session_convenience_methods_inject_header(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "web-server")
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured.setdefault("headers", []).append(dict(request.headers))
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        session = shim.Session()
+        session.get("http://example.test/path")
+        session.post("http://example.test/path", json={})
+
+        assert all(h[SOURCE_HEADER] == "web-server" for h in captured["headers"])
+
+    def test_no_header_without_env(self, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured["headers"] = dict(request.headers)
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        shim.get("http://example.test/path")
+
+        assert SOURCE_HEADER not in captured["headers"]
+
+
+class TestExceptionTransparency:
+    def test_module_level_connection_error_propagates_untouched(self, monkeypatch):
+        monkeypatch.setattr(HTTPAdapter, "send", _raise_connection_error)
+
+        with pytest.raises(real_requests.exceptions.ConnectionError):
+            shim.get("http://example.test/path")
+
+    def test_session_connection_error_propagates_untouched(self, monkeypatch):
+        monkeypatch.setattr(HTTPAdapter, "send", _raise_connection_error)
+
+        with pytest.raises(real_requests.exceptions.ConnectionError):
+            shim.Session().request("GET", "http://example.test/path")
+
+
+class TestMissingDependency:
+    def test_import_error_message_mentions_extra(self, monkeypatch):
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "requests":
+                raise ImportError("No module named 'requests'")
+            return real_import(name, *args, **kwargs)
+
+        sys.modules.pop("visionai_sdk_python.requests", None)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        try:
+            with pytest.raises(ImportError, match=r"visionai-sdk-python\[requests\]"):
+                importlib.import_module("visionai_sdk_python.requests")
+        finally:
+            sys.modules.pop("visionai_sdk_python.requests", None)
+            monkeypatch.setattr(builtins, "__import__", real_import)
+            importlib.import_module("visionai_sdk_python.requests")
