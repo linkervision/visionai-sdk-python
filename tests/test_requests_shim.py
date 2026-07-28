@@ -100,6 +100,45 @@ class TestRequestsShimHeaderInjection:
 
         assert SOURCE_HEADER not in captured["headers"]
 
+    def test_session_send_prepared_request_injects_header(self, monkeypatch):
+        """Regression test: session.send(prepared_request) is a supported
+        public requests workflow that bypasses request() entirely -- it
+        must still get the header, since Session overrides send(), not
+        request()."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured["headers"] = dict(request.headers)
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        session = shim.Session()
+        req = real_requests.Request("GET", "http://example.test/path")
+        prepped = session.prepare_request(req)
+        session.send(prepped)
+
+        assert captured["headers"][SOURCE_HEADER] == "stream-agent"
+
+    def test_session_factory_returns_shim_session(self, monkeypatch):
+        """Regression test: requests.session() (the real library's own
+        lowercase factory, still supported though deprecated) must return
+        this module's Session, not fall through __getattr__ to a plain
+        real requests.Session that never injects anything."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured["headers"] = dict(request.headers)
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        session = shim.session()
+        assert isinstance(session, shim.Session)
+        session.get("http://example.test/path")
+
+        assert captured["headers"][SOURCE_HEADER] == "stream-agent"
+
 
 class TestExceptionTransparency:
     def test_module_level_connection_error_propagates_untouched(self, monkeypatch):
