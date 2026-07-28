@@ -4,45 +4,44 @@ Every shim (``requests``, ``httpx``, ``aiohttp``) reads the same
 ``VISIONAI_SERVICE_SOURCE`` environment variable and merges the same
 ``X-Request-Source`` header the same way, so the behavior is defined once
 here instead of three times.
+
+Two entry points, for two different injection points:
+
+- ``merge_source_headers`` -- for module-level functions with no
+  persistent Session/Client (``requests.get``, ``httpx.post``, ...):
+  there is only one set of headers to consider (whatever the caller
+  passed to this specific call), so a pre-merge check against that one
+  dict is enough.
+- ``inject_source_header`` -- for ``Session.send()``/``Client.send()``
+  overrides: by the time a request reaches ``send()``, the real library
+  has already merged the Session/Client's own default headers with any
+  per-call headers into one final, already-case-insensitive header view
+  -- covering every path that produces a request object, including a
+  caller who builds one manually and calls ``send()`` directly, bypassing
+  ``request()``/``build_request()`` entirely. A single presence check
+  against that final view is both simpler and more complete than trying
+  to enumerate "per-call vs default" at an earlier point.
 """
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
 SOURCE_ENV_VAR = "VISIONAI_SERVICE_SOURCE"
 SOURCE_HEADER = "X-Request-Source"
 
 
-def merge_source_headers(
-    existing_headers: Mapping[str, str] | None,
-    default_headers: Mapping[str, str] | None = None,
-) -> dict[str, str]:
+def merge_source_headers(existing_headers: Mapping[str, str] | None) -> dict[str, str]:
     """Merge ``X-Request-Source`` into a copy of the caller's headers.
 
     The env var is read fresh on every call (a single dict lookup, not
     worth caching). If it is unset, or the caller already supplied
-    ``X-Request-Source`` themselves -- either on this specific call
-    (``existing_headers``) or as a default configured on the Session/Client
-    itself (``default_headers``, e.g. ``requests.Session.headers`` or
-    ``httpx.Client(headers=...)``) -- matched case-insensitively, since HTTP
-    header names are case-insensitive but a plain dict key is not, the
-    caller's headers are returned unchanged.
-
-    ``default_headers`` matters because callers of ``Session``/``Client``
-    typically configure a header once at construction time rather than on
-    every individual call; without checking it too, this function can't
-    tell "caller didn't set anything" apart from "caller set it at the
-    Session/Client level," and would inject the env value as a per-call
-    header that then wins over the caller's own default in both requests'
-    and httpx's own header-merge precedence.
+    ``X-Request-Source`` themselves (matched case-insensitively, since
+    HTTP header names are case-insensitive but a plain dict key is not),
+    the caller's headers are returned unchanged.
 
     Args:
-        existing_headers: The headers the caller passed to this specific
-            request, if any.
-        default_headers: Headers already configured as defaults on the
-            underlying Session/Client, if any. Only consulted to decide
-            whether to inject -- never copied into the returned dict, since
-            the real library already merges its own defaults separately.
+        existing_headers: The headers the caller passed to this request,
+            if any.
 
     Returns:
         A new dict of headers to send, never ``None``.
@@ -56,10 +55,22 @@ def merge_source_headers(
     if any(key.lower() == SOURCE_HEADER.lower() for key in merged):
         return merged
 
-    if default_headers and any(
-        key.lower() == SOURCE_HEADER.lower() for key in default_headers
-    ):
-        return merged
-
     merged[SOURCE_HEADER] = source
     return merged
+
+
+def inject_source_header(headers: MutableMapping[str, str]) -> None:
+    """Set ``X-Request-Source`` on ``headers`` in place, if not already present.
+
+    Meant for a request's final, already-merged header mapping (e.g.
+    ``PreparedRequest.headers``, ``httpx.Request.headers``) at the point
+    just before it's actually sent -- see module docstring for why this
+    is a single check rather than the two-source merge
+    ``merge_source_headers`` does.
+    """
+    if any(key.lower() == SOURCE_HEADER.lower() for key in headers):
+        return
+
+    source = os.environ.get(SOURCE_ENV_VAR)
+    if source:
+        headers[SOURCE_HEADER] = source
