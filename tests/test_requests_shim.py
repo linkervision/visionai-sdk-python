@@ -42,6 +42,34 @@ class TestMergeSourceHeaders:
         result = merge_source_headers({"x-request-source": "web-server"})
         assert result == {"x-request-source": "web-server"}
 
+    def test_no_op_returns_original_object_unchanged(self, monkeypatch):
+        """Regression test: when nothing needs to change, the caller's
+        original headers object must come back untouched -- not converted
+        to a dict -- so a caller passing something other than a plain dict
+        (e.g. a list of pairs with intentional duplicates) never has that
+        representation silently altered on a call this function was never
+        going to modify anyway."""
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        dup_headers = [("X-Foo", "1"), ("X-Foo", "2")]
+
+        result = merge_source_headers(dup_headers)
+
+        assert result is dup_headers
+
+    def test_preserves_duplicate_header_pairs_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        dup_headers = [("X-Foo", "1"), ("X-Foo", "2")]
+
+        assert merge_source_headers(dup_headers) == dup_headers
+
+    def test_preserves_duplicate_header_pairs_when_injecting(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        dup_headers = [("X-Foo", "1"), ("X-Foo", "2")]
+
+        result = merge_source_headers(dup_headers)
+
+        assert result == [*dup_headers, (SOURCE_HEADER, "stream-agent")]
+
 
 class TestRequestsShimHeaderInjection:
     def test_module_level_get_injects_header(self, monkeypatch):
