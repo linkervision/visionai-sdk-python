@@ -1,39 +1,14 @@
-"""Drop-in replacement for the ``httpx`` library.
+"""Drop-in replacement for ``httpx`` — swap the import, requests auto-carry X-Request-Source.
 
-Same interface as ``httpx`` -- swap the import and every outbound call
-automatically carries ``X-Request-Source`` (read from the
-``VISIONAI_SERVICE_SOURCE`` env var). This module is a pure passthrough:
-it does not catch, translate, or wrap anything ``httpx`` raises or
-returns, so existing ``try``/``except`` and ``isinstance`` checks around
-``httpx`` exceptions keep working unchanged.
+    from visionai_sdk_python import httpx   # was: import httpx
 
-    # before
-    import httpx
-    httpx.post(url, json=payload, headers=h)
+Pure passthrough, no exception translation. ``httpx`` is already a core
+dependency, no optional extra needed. Shares its name with the real
+``httpx`` package deliberately — absolute imports mean ``import httpx``
+below still resolves to the real package.
 
-    # after -- only this line changes
-    from visionai_sdk_python import httpx
-    httpx.post(url, json=payload, headers=h)
-
-``httpx`` is already a core dependency of this SDK, so no optional extra
-is required here (unlike the ``requests``/``aiohttp`` shims).
-
-Note: this module intentionally shares its name with the third-party
-``httpx`` package. Python 3 imports are absolute by default, so
-``import httpx`` below resolves to the real third-party package, not
-this module -- a deliberate naming choice, not a mistake, though it can
-confuse IDEs/type-checkers that don't model that distinction.
-
-``Client``/``AsyncClient`` override ``send()`` rather than
-``build_request()``/``request()``: ``send()`` is the single choke point
-the real ``httpx.Client``/``AsyncClient`` use to actually transmit every
-request, reached by ``.request()``, ``.get()``, ``.post()``, ``.stream()``
--- and also by a caller who builds a ``Request`` manually (or via
-``build_request()``) and calls ``client.send(request)`` directly, a
-supported public workflow that ``build_request()`` alone would miss
-entirely. By the time a request reaches ``send()``, ``httpx`` has already
-merged the client's own default headers with any per-call headers, so a
-single presence check there covers both cases with one override.
+``Client``/``AsyncClient`` override ``send()``, the single choke point
+after headers are already merged (also covers manual ``send(request)`` calls).
 """
 
 from typing import Any
@@ -105,10 +80,5 @@ def stream(method: str, url: str, *args: Any, **kwargs: Any) -> Any:
 
 
 def __getattr__(name: str) -> Any:
-    """Delegate anything this module doesn't define itself to real ``httpx``.
-
-    Without this, code that references ``httpx.ConnectError``, ``httpx.Timeout``,
-    ``httpx.Response``, ``httpx.HTTPError``, etc. through this shim's namespace
-    breaks with ``AttributeError`` after the documented one-line import swap.
-    """
+    """Delegate anything not defined here to the real ``httpx`` (e.g. exceptions, Response)."""
     return getattr(_httpx, name)
