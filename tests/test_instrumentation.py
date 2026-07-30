@@ -8,6 +8,7 @@ what some layer of the client thought it was going to send.
 import http.server
 import socketserver
 import threading
+import warnings
 
 import aiohttp
 import httpx
@@ -45,9 +46,16 @@ def url():
 
 @pytest.fixture
 def instrumented(monkeypatch):
-    """Instrument with a known source, and always unwrap afterwards."""
+    """Instrument with a known source, and always unwrap afterwards.
+
+    The late-instrumentation warning is expected here and asserted separately in
+    TestLateInstrumentationWarning: a test module necessarily imports the HTTP
+    libraries at the top, which is exactly the situation that warning is for.
+    """
     monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-    instrumentation.instrument()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+        instrumentation.instrument()
     yield
     instrumentation.uninstrument()
 
@@ -138,7 +146,9 @@ class TestAiohttp:
 class TestNoOpByDefault:
     def test_no_env_var_means_no_header(self, url, monkeypatch):
         monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
-        instrumentation.instrument()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
         try:
             assert requests.Session().get(url).text == MISSING
         finally:
@@ -146,7 +156,9 @@ class TestNoOpByDefault:
 
     def test_uninstrument_restores_original_behavior(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        instrumentation.instrument()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
         assert requests.Session().get(url).text == "stream-agent"
 
         instrumentation.uninstrument()
@@ -155,9 +167,11 @@ class TestNoOpByDefault:
 
     def test_instrument_is_idempotent(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        instrumentation.instrument()
-        instrumentation.instrument()
-        instrumentation.instrument()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
+            instrumentation.instrument()
+            instrumentation.instrument()
         try:
             assert requests.Session().get(url).text == "stream-agent"
         finally:
@@ -171,7 +185,9 @@ class TestMalformedEnvVar:
 
     def test_trailing_newline_is_stripped(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent\n")
-        instrumentation.instrument()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
         try:
             assert requests.Session().get(url).text == "stream-agent"
         finally:
@@ -181,9 +197,81 @@ class TestMalformedEnvVar:
         self, url, monkeypatch
     ):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream\nagent")
-        instrumentation.instrument()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
         try:
             with pytest.warns(RuntimeWarning):
                 assert requests.Session().get(url).text == MISSING
         finally:
             instrumentation.uninstrument()
+
+
+class TestLateInstrumentationWarning:
+    """gevent.monkey warns when patched too late; so should we."""
+
+    def test_warns_when_requests_already_imported(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.uninstrument()
+        assert "requests" in __import__("sys").modules
+
+        try:
+            with pytest.warns(instrumentation.LateInstrumentationWarning):
+                instrumentation.instrument()
+        finally:
+            instrumentation.uninstrument()
+
+    def test_quiet_when_optional_libraries_not_loaded(self, monkeypatch):
+        """httpx is always loaded via the package __init__, so it must not warn."""
+        import sys
+
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        monkeypatch.delitem(sys.modules, "requests", raising=False)
+        monkeypatch.delitem(sys.modules, "aiohttp", raising=False)
+        instrumentation.uninstrument()
+
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter(
+                    "error", instrumentation.LateInstrumentationWarning
+                )
+                instrumentation.instrument()
+        finally:
+            instrumentation.uninstrument()
+
+
+class TestSdkClientCarriesHeaderNatively:
+    """The SDK's own clients must attribute themselves without instrument()."""
+
+    def test_sync_client_sets_default_header(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url="http://a.test", vlm_url="http://v.test")
+
+        assert client._client.headers[SOURCE_HEADER] == "stream-agent"
+
+    def test_async_client_sets_default_header(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import AsyncClient
+
+        client = AsyncClient(auth_url="http://a.test", vlm_url="http://v.test")
+
+        assert client._client.headers[SOURCE_HEADER] == "stream-agent"
+
+    def test_no_header_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url="http://a.test", vlm_url="http://v.test")
+
+        assert SOURCE_HEADER not in client._client.headers
+
+    def test_end_to_end_without_instrument(self, url, monkeypatch):
+        """The header must reach the wire, not just sit on the client object."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url=url, vlm_url=url)
+
+        assert client._request("GET", url).text == "stream-agent"

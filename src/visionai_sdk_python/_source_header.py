@@ -37,3 +37,9 @@ def _source_value() -> str | None:
         return None
 
     return value
+
+
+def source_headers() -> dict[str, str]:
+    """Default headers for the SDK's own clients — empty when the env var is unset."""
+    source = _source_value()
+    return {SOURCE_HEADER: source} if source else {}

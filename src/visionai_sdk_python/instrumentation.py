@@ -15,6 +15,8 @@ The real classes are wrapped in place rather than subclassed or shadowed, so
 ``isinstance``, exception identity and the libraries' public APIs are untouched.
 """
 
+import sys
+import warnings
 from typing import Any
 
 import wrapt
@@ -71,11 +73,50 @@ _TARGETS = (
 )
 
 
+class LateInstrumentationWarning(RuntimeWarning):
+    """Raised when instrument() runs after an HTTP library was already imported.
+
+    Modelled on ``gevent.monkey``'s ``MonkeyPatchWarning``: wrapping ``__init__``
+    cannot retrofit a client that has already been constructed, so a module-level
+    ``requests.Session()`` built during someone else's import is missed silently.
+    """
+
+
+# Only the optional extras are worth checking. httpx is always present by the
+# time this module can be imported at all, because the package __init__ pulls in
+# client.py, so its presence carries no signal — the SDK's own client sets the
+# header itself instead.
+_ORDERING_SENSITIVE = ("requests", "aiohttp")
+
+
+def _warn_if_late() -> None:
+    already = [name for name in _ORDERING_SENSITIVE if name in sys.modules]
+    if not already:
+        return
+
+    warnings.warn(
+        f"instrument() called after {', '.join(already)} "
+        f"{'was' if len(already) == 1 else 'were'} already imported. Clients "
+        "constructed before this point do not carry "
+        f"{SOURCE_HEADER} and cannot be retrofitted. Call instrument() at the "
+        "top of the service entrypoint, before importing anything that builds "
+        "an HTTP client.",
+        LateInstrumentationWarning,
+        stacklevel=3,
+    )
+
+
 def instrument() -> None:
-    """Wrap the installed HTTP clients. Idempotent; safe to call once at startup."""
+    """Wrap the installed HTTP clients. Idempotent; safe to call once at startup.
+
+    Must run before any HTTP client is constructed — see
+    :class:`LateInstrumentationWarning`.
+    """
     global _instrumented
     if _instrumented:
         return
+
+    _warn_if_late()
 
     for module, target, wrapper in _TARGETS:
         try:

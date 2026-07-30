@@ -1,6 +1,7 @@
 import httpx
 
 from ._base import _BaseClient
+from ._source_header import source_headers
 from .auth.resource import AuthResource
 from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .vlm.resource import VLMResource
@@ -27,6 +28,7 @@ class Client(_BaseClient):
             max_keepalive_connections=max_keepalive_connections,
         )
         self._client = httpx.Client(
+            headers=source_headers(),
             verify=self.verify_ssl,
             timeout=self.timeout,
             limits=httpx.Limits(
