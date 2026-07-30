@@ -1,6 +1,7 @@
 import httpx
 
 from ._base import _BaseClient
+from ._source_header import source_headers
 from .auth.async_resource import AsyncAuthResource
 from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .vlm.async_resource import AsyncVLMResource
@@ -27,6 +28,7 @@ class AsyncClient(_BaseClient):
             max_keepalive_connections=max_keepalive_connections,
         )
         self._client = httpx.AsyncClient(
+            headers=source_headers(),
             verify=self.verify_ssl,
             timeout=self.timeout,
             limits=httpx.Limits(
