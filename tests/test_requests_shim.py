@@ -71,6 +71,62 @@ class TestMergeSourceHeaders:
         assert result == [*dup_headers, (SOURCE_HEADER, "stream-agent")]
 
 
+class TestMalformedEnvVar:
+    """A bad env var must never break the caller's request — attribution is best-effort."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["stream-agent\n", "  stream-agent  ", "stream-agent\r\n", "\tstream-agent"],
+    )
+    def test_surrounding_whitespace_is_stripped(self, monkeypatch, raw):
+        monkeypatch.setenv(SOURCE_ENV_VAR, raw)
+
+        assert merge_source_headers(None) == {SOURCE_HEADER: "stream-agent"}
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "stream\nagent",
+            "stream-agent\r\nX-Injected: 1",
+            "串流代理",
+            "stream\tagent",
+        ],
+    )
+    def test_unusable_value_is_dropped_with_a_warning(self, monkeypatch, raw):
+        monkeypatch.setenv(SOURCE_ENV_VAR, raw)
+
+        with pytest.warns(RuntimeWarning, match=SOURCE_ENV_VAR):
+            assert merge_source_headers(None) == {}
+        with pytest.warns(RuntimeWarning, match=SOURCE_ENV_VAR):
+            assert merge_source_headers({"Authorization": "Bearer x"}) == {
+                "Authorization": "Bearer x"
+            }
+
+    @pytest.mark.parametrize("raw", ["", "   ", "\n"])
+    def test_blank_value_is_a_silent_no_op(self, monkeypatch, raw):
+        monkeypatch.setenv(SOURCE_ENV_VAR, raw)
+
+        assert merge_source_headers(None) == {}
+        assert merge_source_headers({"A": "b"}) == {"A": "b"}
+
+    def test_session_send_stays_usable_when_value_is_unusable(self, monkeypatch):
+        """Regression: the send() path bypasses requests' own header validation, so an
+        invalid value used to surface as a bare ValueError that
+        ``except requests.exceptions.RequestException`` could not catch."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream\nagent")
+        captured = {}
+
+        def fake_send(self, request, *args, **kwargs):
+            captured["headers"] = dict(request.headers)
+            return real_requests.Response()
+
+        monkeypatch.setattr(HTTPAdapter, "send", fake_send)
+        with pytest.warns(RuntimeWarning):
+            shim.Session().get("http://example.test/path")
+
+        assert SOURCE_HEADER not in captured["headers"]
+
+
 class TestRequestsShimHeaderInjection:
     def test_module_level_get_injects_header(self, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
