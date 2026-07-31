@@ -111,13 +111,15 @@ def _set_via_init_kwarg(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> 
     source = _effective_source()
     if source:
         headers = kwargs.get("headers")
-        if not _already_set(headers):
-            pairs = (
-                list(headers.items())
-                if hasattr(headers, "items")
-                else list(headers or [])
-            )
-            kwargs["headers"] = [*pairs, (SOURCE_HEADER, source)]
+        pairs = (
+            list(headers.items()) if hasattr(headers, "items") else list(headers or [])
+        )
+        if not _already_set(pairs):
+            pairs.append((SOURCE_HEADER, source))
+        # Always pass the materialized pairs onward. If ``headers`` was a
+        # one-shot iterable, inspecting it above consumed the original even
+        # when it already contained SOURCE_HEADER.
+        kwargs["headers"] = pairs
 
     return wrapped(*args, **kwargs)
 

@@ -142,6 +142,23 @@ class TestAiohttp:
             assert len(session.headers.getall("X-Foo")) == 2
             assert session.headers[SOURCE_HEADER] == "stream-agent"
 
+    async def test_preserves_caller_headers_from_iterator(self, instrumented):
+        """Inspecting a one-shot iterator must not consume its headers."""
+        headers = iter([("X-Custom", "hello"), ("X-Trace", "abc123")])
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            assert session.headers["X-Custom"] == "hello"
+            assert session.headers["X-Trace"] == "abc123"
+            assert session.headers[SOURCE_HEADER] == "stream-agent"
+
+    async def test_iterator_supplied_source_header_wins(self, instrumented):
+        """A consumed iterator must be replaced even when no injection is needed."""
+        headers = iter([("X-Custom", "hello"), (SOURCE_HEADER, "caller")])
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            assert session.headers["X-Custom"] == "hello"
+            assert session.headers[SOURCE_HEADER] == "caller"
+
 
 class TestNoOpByDefault:
     def test_no_env_var_means_no_header(self, url, monkeypatch):
