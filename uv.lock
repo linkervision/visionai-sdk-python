@@ -1078,7 +1078,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", extras = ["cryptography"], specifier = ">=2.8.0" },
     { name = "requests", marker = "extra == 'requests'", specifier = ">=2.31" },
-    { name = "wrapt", specifier = ">=1.16" },
+    { name = "wrapt", specifier = ">=1.16,<3" },
 ]
 provides-extras = ["requests", "aiohttp"]
 
