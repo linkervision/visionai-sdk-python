@@ -11,7 +11,7 @@ Python client library for VisionAI authentication and Vision Language Model (VLM
 - **VLM Inference**: Submit and poll vision-language model tasks
 - **Async Support**: Full async/await support with `AsyncClient`
 - **Type Safe**: Full type hints with Pydantic validation
-- **Drop-in HTTP Shims**: Auto-attach a service-source header to every outbound `requests`/`httpx`/`aiohttp` call by changing one import line
+- **Service Source Attribution**: Auto-attach a service-source header to every outbound `requests`/`httpx`/`aiohttp` call with a single startup call
 
 ## Installation
 
@@ -19,14 +19,14 @@ Python client library for VisionAI authentication and Vision Language Model (VLM
 pip install visionai-sdk-python
 ```
 
-The `requests` and `aiohttp` drop-in shims (see [Drop-in HTTP Shims](#drop-in-http-shims-service-source-attribution) below) need their underlying library installed via optional extras:
+Attributing direct `requests`/`aiohttp` calls (see [Service Source Attribution](#service-source-attribution) below) needs the underlying library installed via optional extras:
 
 ```bash
 pip install visionai-sdk-python[requests]
 pip install visionai-sdk-python[aiohttp]
 ```
 
-`httpx` is already a core dependency, so its shim needs no extra.
+`httpx` is already a core dependency, so it needs no extra.
 
 ## Quick Start
 
@@ -241,68 +241,66 @@ async with AsyncClient(auth_url="...", vlm_url="...") as client:
 # client.close() called automatically
 ```
 
-## Drop-in HTTP Shims (Service Source Attribution)
+## Service Source Attribution
 
-If a service calls VisionAI's VLM endpoints using its own `requests`/`httpx`/`aiohttp` code (rather than `Client`/`AsyncClient`), the SDK provides drop-in replacements for those libraries that automatically attach an `X-Request-Source` header to every outbound request, identifying which service/deployment made the call. This is what lets downstream systems attribute VLM token usage (and other cross-service requests) back to the calling service.
+Outbound requests to VisionAI carry an `X-Request-Source` header naming the
+service that made the call, so downstream systems can attribute VLM token usage
+back to it. Set `VISIONAI_SERVICE_SOURCE` to the deployment's stable service name
+(e.g. via the Kubernetes Downward API, reading the pod's `app` label).
 
-Set the `VISIONAI_SERVICE_SOURCE` environment variable to the deployment's stable service name (e.g. via the Kubernetes Downward API, reading the pod's `app` label), then change only the import line:
+### Using `Client` / `AsyncClient`
 
-### `requests`
+Nothing to do. The SDK's own clients pick the variable up automatically.
 
-```bash
-pip install visionai-sdk-python[requests]
-```
+### Using `requests` / `httpx` / `aiohttp` directly
 
-```python
-# before
-import requests
-requests.post(url, json=payload, headers=h)
-
-# after -- only this line changes
-from visionai_sdk_python import requests
-requests.post(url, json=payload, headers=h)
-```
-
-A drop-in `Session` class is also available: `from visionai_sdk_python.requests import Session`.
-
-### `httpx`
-
-`httpx` is already a core dependency -- no extra install needed.
+Call `instrument()` once at service startup. **No other code changes** — your
+existing `import requests` and every call site stay exactly as they are.
 
 ```python
-# before
-import httpx
-httpx.post(url, json=payload, headers=h)
+from visionai_sdk_python import instrumentation
 
-# after -- only this line changes
-from visionai_sdk_python import httpx
-httpx.post(url, json=payload, headers=h)
+instrumentation.instrument()
 ```
 
-Drop-in `Client`/`AsyncClient` classes are also available and cover every request method, including `.stream()`.
+This wraps `requests.Session`, `httpx.Client`/`AsyncClient` and
+`aiohttp.ClientSession` in place, so it also covers calls made by third-party
+packages you cannot edit, and module-level one-shots like `requests.get()`.
 
-### `aiohttp`
+The underlying libraries are optional extras, and whichever is not installed is
+skipped:
 
 ```bash
+pip install visionai-sdk-python[requests]   # httpx is already a core dependency
 pip install visionai-sdk-python[aiohttp]
 ```
 
-```python
-# before
-import aiohttp
-session = aiohttp.ClientSession()
+### Call it early
 
-# after -- only this line changes
-from visionai_sdk_python import aiohttp
-session = aiohttp.ClientSession()
-```
+`instrument()` cannot retrofit a client that already exists, so it has to run
+before anything constructs one — put it at the top of your entrypoint, above the
+imports that pull in your application code. Getting this wrong fails *partially*
+and silently: a module-level `Session()` built during someone else's import
+misses the header while later clients still get it. `instrument()` emits a
+`LateInstrumentationWarning` when it detects this, in the same spirit as
+`gevent.monkey`'s `MonkeyPatchWarning`.
+
+`uninstrument()` reverses everything, which is mainly useful for test isolation.
 
 ### Behavior
 
-- If `VISIONAI_SERVICE_SOURCE` is unset, no header is added (fully backward compatible).
-- If your own code already sets `X-Request-Source` on a request, that value is respected and never overwritten (checked case-insensitively).
-- These shims are pure passthroughs: they never catch, translate, or wrap exceptions from the underlying library. A connection failure raises the exact same `requests.exceptions.ConnectionError` / `httpx.ConnectError` / `aiohttp.ClientConnectorError` your code already handles today.
-- `visionai_sdk_python.httpx` and `visionai_sdk_python.aiohttp` intentionally share their names with the third-party `httpx`/`aiohttp` packages. This is deliberate -- Python 3's absolute imports mean `import httpx`/`import aiohttp` inside those modules resolve to the real packages, not themselves -- but it can confuse IDEs/type-checkers that don't model that distinction.
+- If `VISIONAI_SERVICE_SOURCE` is unset, no header is added — fully backward
+  compatible.
+- If your own code already sets `X-Request-Source`, that value is respected and
+  never overwritten (checked case-insensitively).
+- The real library classes are wrapped in place, never replaced or subclassed, so
+  `isinstance` checks, exception identity and the full public API are unchanged.
+  Exceptions are never caught, translated or wrapped.
+- A malformed `VISIONAI_SERVICE_SOURCE` is dropped rather than allowed to break
+  the request. Surrounding whitespace is stripped, so a trailing newline from a
+  Helm block scalar is handled; a value that is still unusable as a header
+  (control characters, non-ASCII) is skipped with a `RuntimeWarning` and the
+  request proceeds unattributed.
 
 ## Development
 
