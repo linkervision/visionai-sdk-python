@@ -275,3 +275,153 @@ class TestSdkClientCarriesHeaderNatively:
         client = Client(auth_url=url, vlm_url=url)
 
         assert client._request("GET", url).text == "stream-agent"
+
+
+class TestOriginFromHeaders:
+    def test_extracts_case_insensitively_from_a_mapping(self):
+        assert (
+            instrumentation.origin_from_headers({"x-request-source": "observ-pod-1"})
+            == "observ-pod-1"
+        )
+
+    def test_extracts_from_a_list_of_pairs(self):
+        headers = [("Authorization", "Bearer x"), ("X-Request-Source", "observ-pod-1")]
+
+        assert instrumentation.origin_from_headers(headers) == "observ-pod-1"
+
+    def test_returns_none_when_absent(self):
+        assert (
+            instrumentation.origin_from_headers({"Authorization": "Bearer x"}) is None
+        )
+        assert instrumentation.origin_from_headers({}) is None
+        assert instrumentation.origin_from_headers(None) is None
+
+
+class TestCurrentOriginScope:
+    """A-5: forwarding an inherited origin instead of stamping this service's own."""
+
+    def test_client_built_inside_scope_inherits_the_origin(self, url, instrumented):
+        with instrumentation.current_origin("observ-pod-1"):
+            assert requests.Session().get(url).text == "observ-pod-1"
+
+    def test_outside_any_scope_falls_back_to_own_identity(self, url, instrumented):
+        assert requests.Session().get(url).text == "stream-agent"
+
+    def test_scope_exit_restores_previous_behavior(self, url, instrumented):
+        with instrumentation.current_origin("observ-pod-1"):
+            assert requests.Session().get(url).text == "observ-pod-1"
+
+        assert requests.Session().get(url).text == "stream-agent"
+
+    def test_none_value_falls_back_to_own_identity(self, url, instrumented):
+        """current_origin(None) is what origin_from_headers() returns when the
+        inbound request carried no X-Request-Source -- this service is the origin."""
+        with instrumentation.current_origin(None):
+            assert requests.Session().get(url).text == "stream-agent"
+
+    def test_nested_scopes_restore_the_outer_value(self, url, instrumented):
+        with instrumentation.current_origin("outer"):
+            with instrumentation.current_origin("inner"):
+                assert requests.Session().get(url).text == "inner"
+
+            assert requests.Session().get(url).text == "outer"
+
+    def test_malformed_inherited_value_falls_back_to_own_identity(
+        self, url, instrumented
+    ):
+        with pytest.warns(RuntimeWarning):
+            with instrumentation.current_origin("bad\nvalue"):
+                assert requests.Session().get(url).text == "stream-agent"
+
+    def test_httpx_client_inherits_the_origin(self, url, instrumented):
+        with instrumentation.current_origin("observ-pod-1"):
+            with httpx.Client() as client:
+                assert client.get(url).text == "observ-pod-1"
+
+    async def test_aiohttp_session_inherits_the_origin(self, url, instrumented):
+        with instrumentation.current_origin("observ-pod-1"):
+            async with aiohttp.ClientSession() as session:
+                response = await session.get(url)
+
+                assert await response.text() == "observ-pod-1"
+
+    def test_sdk_client_inherits_the_origin(self, url, instrumented):
+        from visionai_sdk_python import Client
+
+        with instrumentation.current_origin("observ-pod-1"):
+            client = Client(auth_url=url, vlm_url=url)
+
+            assert client._request("GET", url).text == "observ-pod-1"
+
+    async def test_concurrent_tasks_do_not_leak_origin_into_each_other(
+        self, url, instrumented
+    ):
+        """The whole point of contextvars over a plain global: isolated per task."""
+        import asyncio
+
+        results = {}
+
+        async def handle(origin, key):
+            with instrumentation.current_origin(origin):
+                await asyncio.sleep(0.01)
+                results[key] = requests.Session().get(url).text
+
+        await asyncio.gather(handle("task-a", "a"), handle("task-b", "b"))
+
+        assert results == {"a": "task-a", "b": "task-b"}
+
+    def test_per_call_header_overrides_a_shared_clients_default(
+        self, url, instrumented
+    ):
+        """The documented workaround for a client built once and reused across many
+        requests: per-call headers already override client-level defaults."""
+        shared = (
+            requests.Session()
+        )  # built outside any scope -> defaults to "stream-agent"
+
+        with instrumentation.current_origin("observ-pod-1"):
+            response = shared.get(
+                url, headers={"X-Request-Source": instrumentation.get_current_origin()}
+            )
+
+        assert response.text == "observ-pod-1"
+
+
+class TestPodChainScenario:
+    """The exact scenario from the review discussion: observ-pod-1 -> observ-pod-2 -> VLM,
+    where pod-2's own request-handling code uses current_origin()."""
+
+    def test_pod_2_forwards_pod_1s_identity_when_using_current_origin(
+        self, url, monkeypatch
+    ):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "observ-pod-2")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
+        try:
+            # pod-2's inbound-request handling: extract what pod-1 sent, scope it.
+            inbound_headers = {SOURCE_HEADER: "observ-pod-1"}
+            origin = instrumentation.origin_from_headers(inbound_headers)
+            with instrumentation.current_origin(origin):
+                # pod-2's own outbound call to VLM, made while handling that request.
+                response = requests.Session().get(url)
+        finally:
+            instrumentation.uninstrument()
+
+        assert response.text == "observ-pod-1"
+
+    def test_without_current_origin_pod_2_stamps_its_own_identity(
+        self, url, monkeypatch
+    ):
+        """Same inbound request, but pod-2's code never calls current_origin() --
+        this is the A-5 gap: pod-1's identity is silently lost."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "observ-pod-2")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
+            instrumentation.instrument()
+        try:
+            response = requests.Session().get(url)
+        finally:
+            instrumentation.uninstrument()
+
+        assert response.text == "observ-pod-2"

@@ -289,21 +289,45 @@ misses the header while later clients still get it. `instrument()` emits a
 
 ### If your service is called by another instrumented service
 
-`instrument()` always stamps *your own* `VISIONAI_SERVICE_SOURCE`. It does not
-read an inbound request's `X-Request-Source` and forward it. That's correct as
-long as your service is the true origin of the VLM calls it makes.
+By default `instrument()` stamps *your own* `VISIONAI_SERVICE_SOURCE` on every
+outbound call. That's correct as long as your service is the true origin of the
+VLM calls it makes.
 
 If service A calls your service, and your service then calls VLM as part of
-handling A's request, your outbound call gets *your* identity, not A's — A's
-identity is silently lost at that hop. This is the same problem
+handling A's request, you should forward A's identity rather than stamp your
+own — otherwise it's silently lost at that hop, the same problem
 `visionai-vlm-scheduling-service` solves for its Redis queue hop by explicitly
-storing and re-attaching the header; a direct HTTP call between two
-SDK-instrumented services needs the same treatment (extract the inbound header,
-carry it through request-scoped context, inject it on every outbound call made
-while handling that request) — a different mechanism from this module's
-process-lifetime environment variable, not yet provided by this SDK. If this
-applies to you, talk to the platform team before relying on `instrument()`
-alone for that path.
+storing and re-attaching the header. From your own inbound-request middleware:
+
+```python
+from visionai_sdk_python import instrumentation
+
+origin = instrumentation.origin_from_headers(incoming_request.headers)
+with instrumentation.current_origin(origin):
+    ...  # handle the request, including any outbound VLM calls
+```
+
+`origin_from_headers()` reads an inbound `X-Request-Source` case-insensitively
+(a mapping or a list of `(key, value)` pairs — whatever your framework's headers
+object gives you), returning `None` if the caller didn't set one, which means
+*you* are the origin. `current_origin()` is backed by `contextvars`, so it's
+isolated per request under concurrency — safe with `asyncio` tasks and threaded
+workers alike, and nesting restores the outer value on exit.
+
+This makes forwarding automatic for a client built fresh inside that scope —
+`instrument()`'s injection runs at construction time and checks the current
+scope first. A client built once at startup and reused across many requests
+can't pick up a value that varies per request just by being instrumented; pass
+the header explicitly on outbound calls made in that scope instead:
+
+```python
+response = shared_client.get(
+    url, headers={"X-Request-Source": instrumentation.get_current_origin()}
+)
+```
+
+Per-call headers already override a client's defaults in requests/httpx/aiohttp,
+so no extra mechanism is needed for that case.
 
 ### Behavior
 

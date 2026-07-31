@@ -14,23 +14,30 @@ one-shots (``requests.get()``) that create a client internally.
 The real classes are wrapped in place rather than subclassed or shadowed, so
 ``isinstance``, exception identity and the libraries' public APIs are untouched.
 
-**Known limitation — this stamps the local service's identity, it does not
-propagate an inherited one.** ``instrument()`` always injects this process's own
-``VISIONAI_SERVICE_SOURCE``; it never reads an inbound request's
-``X-Request-Source`` and forwards it. That is correct as long as a service is
-the true origin of whatever VLM call it makes. If service A calls service B
-(both instrumented) and B then calls VLM on A's behalf, B's outbound call gets
-*B's* identity, not A's — A's identity is silently lost at that hop, the same
-problem ``visionai-vlm-scheduling-service`` solves for its Redis queue hop by
-explicitly storing and re-attaching the header. Forwarding an inherited origin
-requires request-scoped context (extract on inbound, inject on every outbound
-call made while handling that request) — a different mechanism from this
-module's process-lifetime environment variable, and out of scope here. See
-"A-5" in the service-source-attribution plan. Today's known callers
-(data-engine/observ/mirra) each call VLM independently rather than through each
-other, so this gap does not currently affect correctness — but the first
-service-to-service chain between two SDK-instrumented services will need this
-feature before it can be attributed correctly.
+**Forwarding an inherited origin (A-5).** By default this stamps the local
+service's own identity — correct as long as a service is the true origin of
+whatever VLM call it makes. If service A calls service B (both instrumented)
+and B then calls VLM on A's behalf, B should forward A's identity rather than
+stamp its own, the same problem ``visionai-vlm-scheduling-service`` solves for
+its Redis queue hop by explicitly storing and re-attaching the header. Use
+``current_origin()``/``origin_from_headers()`` from your own inbound-request
+middleware::
+
+    from visionai_sdk_python import instrumentation
+
+    origin = instrumentation.origin_from_headers(incoming_request.headers)
+    with instrumentation.current_origin(origin):
+        ...  # handle the request; a client built in this scope inherits `origin`
+
+This makes forwarding automatic for a client built fresh inside that scope
+(``instrument()``'s injection already runs at construction time and now checks
+the current scope first). A client built once at startup and reused across many
+requests can't pick up a value that varies per request just by being
+instrumented — pass ``headers={"X-Request-Source": instrumentation.get_current_origin()}``
+explicitly on outbound calls made in that scope instead; per-call headers
+already override a client's defaults in requests/httpx/aiohttp, so no extra
+mechanism is needed for that case. See "A-5" in the service-source-attribution
+plan.
 """
 
 import sys
@@ -39,7 +46,22 @@ from typing import Any
 
 import wrapt
 
-from ._source_header import SOURCE_HEADER, _source_value
+from ._source_header import (
+    SOURCE_HEADER,
+    _effective_source,
+    current_origin,
+    get_current_origin,
+    origin_from_headers,
+)
+
+__all__ = [
+    "instrument",
+    "uninstrument",
+    "current_origin",
+    "get_current_origin",
+    "origin_from_headers",
+    "LateInstrumentationWarning",
+]
 
 _instrumented = False
 
@@ -50,10 +72,15 @@ def _already_set(headers: Any) -> bool:
 
 
 def _set_after_init(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-    """For clients exposing a mutable public ``.headers`` (requests, httpx)."""
+    """For clients exposing a mutable public ``.headers`` (requests, httpx).
+
+    Reads ``_effective_source()`` at construction time, so a client built inside
+    a ``current_origin()`` scope picks up the inherited value rather than this
+    service's own — see "Forwarding an inherited origin" above.
+    """
     result = wrapped(*args, **kwargs)
 
-    source = _source_value()
+    source = _effective_source()
     if source and not _already_set(instance.headers):
         instance.headers[SOURCE_HEADER] = source
 
@@ -67,7 +94,7 @@ def _set_via_init_kwarg(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> 
     caller supplied. This is also the one injection vehicle ``aioresponses``
     can see, which a ``TraceConfig``-based approach cannot offer.
     """
-    source = _source_value()
+    source = _effective_source()
     if source:
         headers = kwargs.get("headers")
         if not _already_set(headers):
