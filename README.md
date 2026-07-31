@@ -287,6 +287,24 @@ misses the header while later clients still get it. `instrument()` emits a
 
 `uninstrument()` reverses everything, which is mainly useful for test isolation.
 
+### If your service is called by another instrumented service
+
+`instrument()` always stamps *your own* `VISIONAI_SERVICE_SOURCE`. It does not
+read an inbound request's `X-Request-Source` and forward it. That's correct as
+long as your service is the true origin of the VLM calls it makes.
+
+If service A calls your service, and your service then calls VLM as part of
+handling A's request, your outbound call gets *your* identity, not A's — A's
+identity is silently lost at that hop. This is the same problem
+`visionai-vlm-scheduling-service` solves for its Redis queue hop by explicitly
+storing and re-attaching the header; a direct HTTP call between two
+SDK-instrumented services needs the same treatment (extract the inbound header,
+carry it through request-scoped context, inject it on every outbound call made
+while handling that request) — a different mechanism from this module's
+process-lifetime environment variable, not yet provided by this SDK. If this
+applies to you, talk to the platform team before relying on `instrument()`
+alone for that path.
+
 ### Behavior
 
 - If `VISIONAI_SERVICE_SOURCE` is unset, no header is added — fully backward

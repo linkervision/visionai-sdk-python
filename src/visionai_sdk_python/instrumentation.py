@@ -13,6 +13,24 @@ one-shots (``requests.get()``) that create a client internally.
 
 The real classes are wrapped in place rather than subclassed or shadowed, so
 ``isinstance``, exception identity and the libraries' public APIs are untouched.
+
+**Known limitation — this stamps the local service's identity, it does not
+propagate an inherited one.** ``instrument()`` always injects this process's own
+``VISIONAI_SERVICE_SOURCE``; it never reads an inbound request's
+``X-Request-Source`` and forwards it. That is correct as long as a service is
+the true origin of whatever VLM call it makes. If service A calls service B
+(both instrumented) and B then calls VLM on A's behalf, B's outbound call gets
+*B's* identity, not A's — A's identity is silently lost at that hop, the same
+problem ``visionai-vlm-scheduling-service`` solves for its Redis queue hop by
+explicitly storing and re-attaching the header. Forwarding an inherited origin
+requires request-scoped context (extract on inbound, inject on every outbound
+call made while handling that request) — a different mechanism from this
+module's process-lifetime environment variable, and out of scope here. See
+"A-5" in the service-source-attribution plan. Today's known callers
+(data-engine/observ/mirra) each call VLM independently rather than through each
+other, so this gap does not currently affect correctness — but the first
+service-to-service chain between two SDK-instrumented services will need this
+feature before it can be attributed correctly.
 """
 
 import sys
