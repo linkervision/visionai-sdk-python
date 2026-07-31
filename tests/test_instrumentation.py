@@ -208,26 +208,61 @@ class TestMalformedEnvVar:
 
 
 class TestLateInstrumentationWarning:
-    """gevent.monkey warns when patched too late; so should we."""
+    """Checks for already-*constructed instances*, not already-imported modules --
+    see the class docstring in instrumentation.py for why that's the check that
+    actually matches our failure mode (unlike gevent.monkey's class-rebinding
+    check, __init__-patching leaves stale class references harmless)."""
 
-    def test_warns_when_requests_already_imported(self, monkeypatch):
+    def test_warns_when_a_session_was_already_built(self, monkeypatch):
+        """A test failure here would pin `session` alive via the traceback's frame
+        references, leaking it into later tests -- so this must pass cleanly, and
+        we explicitly drop the reference and collect before returning either way."""
+        import gc
+
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
         instrumentation.uninstrument()
-        assert "requests" in __import__("sys").modules
 
+        session = requests.Session()  # built before instrument() -- larryyu1285's case
         try:
-            with pytest.warns(instrumentation.LateInstrumentationWarning):
+            with pytest.warns(
+                instrumentation.LateInstrumentationWarning,
+                match=r"requests\.sessions\.Session",
+            ):
                 instrumentation.instrument()
         finally:
             instrumentation.uninstrument()
+            session.close()
+            del session
+            gc.collect()
 
-    def test_quiet_when_optional_libraries_not_loaded(self, monkeypatch):
-        """httpx is always loaded via the package __init__, so it must not warn."""
-        import sys
+    def test_warns_when_a_module_level_httpx_client_was_already_built(
+        self, monkeypatch
+    ):
+        """The exact scenario from review: a shared client declared at module level,
+        imported before instrument() runs -- httpx has no equivalent check via
+        sys.modules, this instance-scan is what closes that gap."""
+        import gc
 
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        monkeypatch.delitem(sys.modules, "requests", raising=False)
-        monkeypatch.delitem(sys.modules, "aiohttp", raising=False)
+        instrumentation.uninstrument()
+
+        vlm_client_module_level = httpx.Client()
+        try:
+            with pytest.warns(
+                instrumentation.LateInstrumentationWarning,
+                match=r"httpx\.Client",
+            ):
+                instrumentation.instrument()
+        finally:
+            instrumentation.uninstrument()
+            vlm_client_module_level.close()
+            del vlm_client_module_level
+            gc.collect()
+
+    def test_quiet_when_modules_are_imported_but_no_instance_exists(self, monkeypatch):
+        """Merely having requests/httpx/aiohttp importable carries no signal --
+        only an actual pre-existing instance does."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
         instrumentation.uninstrument()
 
         try:
@@ -238,6 +273,26 @@ class TestLateInstrumentationWarning:
                 instrumentation.instrument()
         finally:
             instrumentation.uninstrument()
+
+    def test_quiet_for_the_sdk_clients_own_internal_httpx_client(self, monkeypatch):
+        """Client/AsyncClient set X-Request-Source unconditionally in their own
+        __init__ via source_headers(), regardless of instrument()'s timing -- so a
+        pre-existing SDK Client is not an instrumentation gap and must not warn."""
+        from visionai_sdk_python import Client
+
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.uninstrument()
+
+        sdk_client = Client(auth_url="http://a.test", vlm_url="http://v.test")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter(
+                    "error", instrumentation.LateInstrumentationWarning
+                )
+                instrumentation.instrument()
+        finally:
+            instrumentation.uninstrument()
+            sdk_client._client.close()
 
 
 class TestSdkClientCarriesHeaderNatively:

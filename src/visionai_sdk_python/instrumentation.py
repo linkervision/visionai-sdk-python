@@ -40,6 +40,7 @@ mechanism is needed for that case. See "A-5" in the service-source-attribution
 plan.
 """
 
+import gc
 import sys
 import warnings
 from typing import Any
@@ -119,33 +120,94 @@ _TARGETS = (
 
 
 class LateInstrumentationWarning(RuntimeWarning):
-    """Raised when instrument() runs after an HTTP library was already imported.
+    """Raised when instrument() runs after a client was already constructed.
 
-    Modelled on ``gevent.monkey``'s ``MonkeyPatchWarning``: wrapping ``__init__``
-    cannot retrofit a client that has already been constructed, so a module-level
-    ``requests.Session()`` built during someone else's import is missed silently.
+    Wrapping ``__init__`` cannot retrofit a client built before this point, so
+    it silently never carries ``X-Request-Source``, and this is the only signal
+    that happened.
+
+    This is *not* the same check ``gevent.monkey``'s ``MonkeyPatchWarning``
+    does, despite the similar spirit. gevent's ``patch_ssl()`` *rebinds*
+    ``ssl.SSLContext`` to a different class, so it scans already-imported
+    modules for a stale reference to the pre-patch class (via ``gc.get_referrers``)
+    — a real, forward-looking risk, since anything built later from that stale
+    reference stays broken forever. We patch ``__init__`` in place; the class
+    object's identity never changes, so a module holding
+    ``from httpx import Client`` from before ``instrument()`` ran is completely
+    fine for anything it constructs afterward — Python looks up ``__init__`` on
+    the class at call time, and we mutated the class's own attribute. Our risk
+    is purely backward-looking: an instance built *before* the patch landed. So
+    instead we scan for already-*existing instances* via ``gc.get_objects()``,
+    which is the check that actually matches our failure mode.
     """
 
 
-# Only the optional extras are worth checking. httpx is always present by the
-# time this module can be imported at all, because the package __init__ pulls in
-# client.py, so its presence carries no signal — the SDK's own client sets the
-# header itself instead.
-_ORDERING_SENSITIVE = ("requests", "aiohttp")
+def _owned_by_sdk_client(obj: Any) -> bool:
+    """True if `obj` is the internal httpx client of our own Client/AsyncClient.
+
+    Those get X-Request-Source from source_headers() directly in __init__,
+    unconditionally — not through instrument()'s wrapt patching at all — so their
+    attribution never depends on instrument()'s timing and this is not a gap.
+    """
+    from . import async_client as _async_client_module
+    from . import client as _client_module
+
+    for ref in gc.get_referrers(obj):
+        if isinstance(ref, (_client_module.Client, _async_client_module.AsyncClient)):
+            if getattr(ref, "_client", None) is obj:
+                return True
+    return False
+
+
+def _find_preexisting_clients() -> dict[str, int]:
+    """Count already-built instances of the classes instrument() is about to wrap.
+
+    Runs once at instrument()-time, before patching; the one-time cost of a full
+    heap scan is a startup-time concern, not a request-path one.
+    """
+    target_classes = []
+    for module_name, class_name in (
+        ("requests", "Session"),
+        ("httpx", "Client"),
+        ("httpx", "AsyncClient"),
+        ("aiohttp", "ClientSession"),
+    ):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            target_classes.append(getattr(module, class_name))
+
+    if not target_classes:
+        return {}
+
+    counts: dict[str, int] = {}
+    for obj in gc.get_objects():
+        try:
+            is_target = isinstance(obj, tuple(target_classes))
+        except ReferenceError:
+            continue
+        if not is_target or _owned_by_sdk_client(obj):
+            continue
+        name = f"{type(obj).__module__}.{type(obj).__qualname__}"
+        counts[name] = counts.get(name, 0) + 1
+
+    return counts
 
 
 def _warn_if_late() -> None:
-    already = [name for name in _ORDERING_SENSITIVE if name in sys.modules]
-    if not already:
+    preexisting = _find_preexisting_clients()
+    if not preexisting:
         return
 
+    described = ", ".join(
+        f"{name} (×{count})" if count > 1 else name
+        for name, count in preexisting.items()
+    )
     warnings.warn(
-        f"instrument() called after {', '.join(already)} "
-        f"{'was' if len(already) == 1 else 'were'} already imported. Clients "
-        "constructed before this point do not carry "
-        f"{SOURCE_HEADER} and cannot be retrofitted. Call instrument() at the "
-        "top of the service entrypoint, before importing anything that builds "
-        "an HTTP client.",
+        f"instrument() called after these clients were already constructed: "
+        f"{described}. They were built before instrument() could wrap their "
+        f"__init__ and do not carry {SOURCE_HEADER}; clients built from now on "
+        "are unaffected. Call instrument() at the top of the service "
+        "entrypoint, before importing anything that builds an HTTP client.",
         LateInstrumentationWarning,
         stacklevel=3,
     )

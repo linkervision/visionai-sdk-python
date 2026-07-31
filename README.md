@@ -281,9 +281,14 @@ pip install visionai-sdk-python[aiohttp]
 before anything constructs one — put it at the top of your entrypoint, above the
 imports that pull in your application code. Getting this wrong fails *partially*
 and silently: a module-level `Session()` built during someone else's import
-misses the header while later clients still get it. `instrument()` emits a
-`LateInstrumentationWarning` when it detects this, in the same spirit as
-`gevent.monkey`'s `MonkeyPatchWarning`.
+misses the header while later clients still get it. `instrument()` scans for
+already-built `requests.Session`/`httpx.Client`/`httpx.AsyncClient`/
+`aiohttp.ClientSession` instances and emits a `LateInstrumentationWarning`
+naming exactly what it found, in the same spirit as `gevent.monkey`'s
+`MonkeyPatchWarning` — though not the same mechanism: gevent's check looks for
+stale references to a class it's about to *rebind*, which doesn't apply here
+since we patch `__init__` in place rather than swap the class out, so instead
+this looks for instances already constructed from it.
 
 `uninstrument()` reverses everything, which is mainly useful for test isolation.
 
