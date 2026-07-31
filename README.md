@@ -327,12 +327,18 @@ the header explicitly on outbound calls made in that scope instead:
 
 ```python
 response = shared_client.get(
-    url, headers={"X-Request-Source": instrumentation.get_current_origin()}
+    url, headers={**instrumentation.source_headers(), **other_headers}
 )
 ```
 
 Per-call headers already override a client's defaults in requests/httpx/aiohttp,
-so no extra mechanism is needed for that case.
+so no extra mechanism is needed for that case. `source_headers()` returns
+`{"X-Request-Source": value}` (inherited origin, falling back to your own
+identity) or `{}` if there is nothing to send. **Do not** pass
+`get_current_origin()` directly as a header value — it returns `None` whenever
+there is no inherited origin (the common case), and `requests` silently drops a
+`None`-valued header (discarding the client's own default in the process) while
+`httpx` raises `TypeError`.
 
 ### Behavior
 

@@ -435,11 +435,62 @@ class TestCurrentOriginScope:
         )  # built outside any scope -> defaults to "stream-agent"
 
         with instrumentation.current_origin("observ-pod-1"):
-            response = shared.get(
-                url, headers={"X-Request-Source": instrumentation.get_current_origin()}
-            )
+            response = shared.get(url, headers={**instrumentation.source_headers()})
 
         assert response.text == "observ-pod-1"
+
+    def test_shared_client_workaround_falls_back_to_own_identity_not_none(
+        self, url, instrumented
+    ):
+        """larryyu1285's repro: outside any scope, get_current_origin() is None, and
+        passing that raw None as a header value breaks both libraries -- requests
+        silently drops the header (discarding the client's own correct default in
+        the process) and httpx raises TypeError. source_headers() must be used
+        instead, since it falls back to this service's own identity as a dict."""
+        assert instrumentation.get_current_origin() is None
+
+        shared = requests.Session()
+        response = shared.get(url, headers={**instrumentation.source_headers()})
+
+        assert response.text == "stream-agent"
+
+    async def test_shared_httpx_client_workaround_does_not_crash(
+        self, url, instrumented
+    ):
+        assert instrumentation.get_current_origin() is None
+
+        async with httpx.AsyncClient() as shared:
+            response = await shared.get(
+                url, headers={**instrumentation.source_headers()}
+            )
+
+        assert response.text == "stream-agent"
+
+    def test_raw_get_current_origin_as_a_header_value_is_the_bug(
+        self, url, instrumented
+    ):
+        """Documents exactly what goes wrong if source_headers() isn't used --
+        pinned here so a future change can't quietly reintroduce the README's
+        original, broken suggestion."""
+        assert instrumentation.get_current_origin() is None
+
+        shared = requests.Session()
+        response = shared.get(
+            url, headers={"X-Request-Source": instrumentation.get_current_origin()}
+        )
+        assert response.text == MISSING  # the bug: silently no header at all
+
+        async def crashes():
+            async with httpx.AsyncClient() as shared_h:
+                return await shared_h.get(
+                    url,
+                    headers={"X-Request-Source": instrumentation.get_current_origin()},
+                )
+
+        import asyncio
+
+        with pytest.raises(TypeError):
+            asyncio.run(crashes())
 
 
 class TestPodChainScenario:

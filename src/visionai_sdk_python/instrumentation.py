@@ -33,11 +33,22 @@ This makes forwarding automatic for a client built fresh inside that scope
 (``instrument()``'s injection already runs at construction time and now checks
 the current scope first). A client built once at startup and reused across many
 requests can't pick up a value that varies per request just by being
-instrumented — pass ``headers={"X-Request-Source": instrumentation.get_current_origin()}``
-explicitly on outbound calls made in that scope instead; per-call headers
-already override a client's defaults in requests/httpx/aiohttp, so no extra
-mechanism is needed for that case. See "A-5" in the service-source-attribution
-plan.
+instrumented — merge ``source_headers()`` into the per-call headers on outbound
+calls made in that scope instead::
+
+    response = shared_client.get(url, headers={**instrumentation.source_headers(), **other_headers})
+
+``source_headers()`` returns ``{"X-Request-Source": value}`` (inherited origin,
+falling back to this service's own identity — the same resolution
+``instrument()``'s automatic injection uses) or ``{}`` if there is nothing to
+send. Per-call headers already override a client's defaults in requests/httpx/
+aiohttp, so no extra mechanism is needed for that case. **Do not** pass
+``get_current_origin()`` directly as a header value — it legitimately returns
+``None`` whenever there is no inherited origin (the common case, meaning this
+service is the origin), and both libraries handle a ``None`` header value
+badly: ``requests`` silently drops it, discarding the client's own correctly-set
+default in the process, and ``httpx`` raises ``TypeError``. See "A-5" in the
+service-source-attribution plan.
 """
 
 import gc
@@ -53,6 +64,7 @@ from ._source_header import (
     current_origin,
     get_current_origin,
     origin_from_headers,
+    source_headers,
 )
 
 __all__ = [
@@ -61,6 +73,7 @@ __all__ = [
     "current_origin",
     "get_current_origin",
     "origin_from_headers",
+    "source_headers",
     "LateInstrumentationWarning",
 ]
 
