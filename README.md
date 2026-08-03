@@ -248,6 +248,43 @@ service that made the call, so downstream systems can attribute VLM token usage
 back to it. Set `VISIONAI_SERVICE_SOURCE` to the deployment's stable service name
 (e.g. via the Kubernetes Downward API, reading the pod's `app` label).
 
+### Setting this up for your service
+
+If you're adopting this from another service (not the SDK's own maintainers),
+here's the checklist:
+
+1. Set `VISIONAI_SERVICE_SOURCE` in your deployment to your own stable service
+   name — this is the value that ends up on the wire, so make it something a
+   human reading a Prometheus label or a token-usage report would recognize.
+2. If you use `Client`/`AsyncClient`, you're done — skip to the next section.
+   If you call `requests`/`httpx`/`aiohttp` directly, call `instrument()` once
+   at startup **with the list of hosts your service actually calls out to**:
+
+   ```python
+   from visionai_sdk_python import instrumentation
+
+   instrumentation.instrument(
+       allowed_destination_hosts=["vlm-inference-server", "vlm-scheduling-service"],
+   )
+   ```
+
+3. **Don't assume the default covers you.** Omitting
+   `allowed_destination_hosts` falls back to the SDK's hardcoded
+   `*-backend.svc.cluster.local` — that only matches if your target's
+   Kubernetes `Service` name literally ends in `-backend`. Most callers need to
+   pass their own list explicitly; if you skip this step, `instrument()` still
+   runs without error, but `X-Request-Source` silently never goes out anywhere,
+   which looks identical to "it's not working" with no error to point at. Use
+   whatever hostname your service already calls (a short in-cluster service
+   name like `vlm-inference-server`, or a wildcard like `*.svc.cluster.local`
+   if you call several).
+4. If in doubt about what your service actually calls, check the host in the
+   URLs you pass to `requests`/`httpx`/`aiohttp` today — that's exactly what
+   `allowed_destination_hosts` needs to match.
+
+The rest of this section covers what `instrument()` does and why, in more
+detail.
+
 ### Using `Client` / `AsyncClient`
 
 Nothing to do. The SDK's own clients pick the variable up automatically.
@@ -260,12 +297,16 @@ existing `import requests` and every call site stay exactly as they are.
 ```python
 from visionai_sdk_python import instrumentation
 
-instrumentation.instrument()
+instrumentation.instrument(
+    allowed_destination_hosts=["vlm-inference-server", "*.svc.cluster.local"],
+)
 ```
 
-This wraps `requests.Session`, `httpx.Client`/`AsyncClient` and
-`aiohttp.ClientSession` in place, so it also covers calls made by third-party
-packages you cannot edit, and module-level one-shots like `requests.get()`.
+This wraps a request-dispatch method of `requests.Session`, `httpx.Client`/
+`AsyncClient` and `aiohttp.ClientSession` in place, so it also covers calls made
+by third-party packages you cannot edit, module-level one-shots like
+`requests.get()`, and requests sent through a client instance that already
+existed before `instrument()` ran (see "Call it any time" below).
 
 The underlying libraries are optional extras, and whichever is not installed is
 skipped:
@@ -275,20 +316,42 @@ pip install visionai-sdk-python[requests]   # httpx is already a core dependency
 pip install visionai-sdk-python[aiohttp]
 ```
 
-### Call it early
+### Destination scoping
 
-`instrument()` cannot retrofit a client that already exists, so it has to run
-before anything constructs one — put it at the top of your entrypoint, above the
-imports that pull in your application code. Getting this wrong fails *partially*
-and silently: a module-level `Session()` built during someone else's import
-misses the header while later clients still get it. `instrument()` scans for
-already-built `requests.Session`/`httpx.Client`/`httpx.AsyncClient`/
-`aiohttp.ClientSession` instances and emits a `LateInstrumentationWarning`
-naming exactly what it found, in the same spirit as `gevent.monkey`'s
-`MonkeyPatchWarning` — though not the same mechanism: gevent's check looks for
-stale references to a class it's about to *rebind*, which doesn't apply here
-since we patch `__init__` in place rather than swap the class out, so instead
-this looks for instances already constructed from it.
+Only destinations matching `allowed_destination_hosts` receive the header;
+every other destination — Stripe, an external webhook, anything outside the
+allowlist — is completely unaffected, on every request including ones made by
+third-party code. This is **fail-closed**: there is no "match everything" mode,
+so a service opts its own internal hosts in explicitly rather than getting them
+for free. Patterns are matched against the parsed URL's hostname (case
+insensitive, `fnmatch`-style globs, e.g. `*.svc.cluster.local`), never against
+the raw URL string, so a host can't be spoofed via path or query string.
+
+If `allowed_destination_hosts` is omitted, it defaults to
+`*-backend.svc.cluster.local`. Pass your own list to use a different or
+additional set of hosts.
+
+The check re-runs on every hop, including redirects: a request to an
+allowlisted host that gets redirected somewhere else stops carrying the header
+at that point rather than leaking it to wherever the redirect points. A header
+your own code set explicitly is never touched, on any hop or destination.
+
+`source_headers()` remains available as an escape hatch for the one case
+per-request scoping can't cover: deliberately sending the header to a
+destination outside `allowed_destination_hosts`. See "If your service is called
+by another instrumented service" below for how to use it.
+
+### Call it any time
+
+Injection runs on `Session.send`, `Client`/`AsyncClient._send_single_request`
+and `aiohttp.ClientRequest.__init__` — a request-dispatch method looked up on
+the class at call time, not at construction. So, unlike a `__init__`-time
+patch, a client instance built before `instrument()` runs is not a gap: every
+call it makes afterwards looks up the same, now-patched method. Calling
+`instrument()` early (before anything constructs a client) is still good
+practice, since it's one less thing to reason about, but there's no silent
+partial-failure mode tied to import order the way there would be if injection
+happened at construction time.
 
 `uninstrument()` reverses everything, which is mainly useful for test isolation.
 
@@ -319,11 +382,14 @@ object gives you), returning `None` if the caller didn't set one, which means
 isolated per request under concurrency — safe with `asyncio` tasks and threaded
 workers alike, and nesting restores the outer value on exit.
 
-This makes forwarding automatic for a client built fresh inside that scope —
-`instrument()`'s injection runs at construction time and checks the current
-scope first. A client built once at startup and reused across many requests
-can't pick up a value that varies per request just by being instrumented; pass
-the header explicitly on outbound calls made in that scope instead:
+This makes forwarding automatic for every request made in that scope, including
+through a client built once at startup and reused across many requests —
+injection runs right before each request is dispatched rather than when the
+client was built, so it reads `current_origin()` fresh every time, not just
+once at construction.
+
+The one case that still needs an explicit pass-through is sending the header to
+a destination outside `allowed_destination_hosts` on purpose:
 
 ```python
 response = shared_client.get(
@@ -336,16 +402,17 @@ so no extra mechanism is needed for that case. `source_headers()` returns
 `{"X-Request-Source": value}` (inherited origin, falling back to your own
 identity) or `{}` if there is nothing to send. **Do not** pass
 `get_current_origin()` directly as a header value — it returns `None` whenever
-there is no inherited origin (the common case), and `requests` silently drops a
-`None`-valued header (discarding the client's own default in the process) while
-`httpx` raises `TypeError`.
+there is no inherited origin (the common case), and `httpx` raises `TypeError`
+on a `None`-valued header.
 
 ### Behavior
 
 - If `VISIONAI_SERVICE_SOURCE` is unset, no header is added — fully backward
   compatible.
+- Only destinations matching `allowed_destination_hosts` get the header — fail
+  closed, checked again on every redirect hop, never a "match everything" mode.
 - If your own code already sets `X-Request-Source`, that value is respected and
-  never overwritten (checked case-insensitively).
+  never overwritten (checked case-insensitively), on any hop or destination.
 - The real library classes are wrapped in place, never replaced or subclassed, so
   `isinstance` checks, exception identity and the full public API are unchanged.
   Exceptions are never caught, translated or wrapped.
