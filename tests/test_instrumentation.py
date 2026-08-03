@@ -8,6 +8,7 @@ what some layer of the client thought it was going to send.
 import http.server
 import socketserver
 import threading
+import urllib.parse
 import warnings
 
 import aiohttp
@@ -23,6 +24,15 @@ MISSING = "MISSING"
 
 class _EchoHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/redirect"):
+            query = urllib.parse.urlparse(self.path).query
+            target = urllib.parse.parse_qs(query)["to"][0]
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
         body = (self.headers.get(SOURCE_HEADER) or MISSING).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
@@ -35,27 +45,41 @@ class _EchoHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _redirect(base: str, target: str) -> str:
+    return f"{base}redirect?to={urllib.parse.quote(target, safe='')}"
+
+
 @pytest.fixture(scope="module")
-def url():
+def _server():
     server = socketserver.TCPServer(("127.0.0.1", 0), _EchoHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}/"
+    yield server
     server.shutdown()
     server.server_close()
 
 
 @pytest.fixture
-def instrumented(monkeypatch):
-    """Instrument with a known source, and always unwrap afterwards.
+def url(_server):
+    return f"http://127.0.0.1:{_server.server_address[1]}/"
 
-    The late-instrumentation warning is expected here and asserted separately in
-    TestLateInstrumentationWarning: a test module necessarily imports the HTTP
-    libraries at the top, which is exactly the situation that warning is for.
+
+@pytest.fixture
+def url_localhost(_server):
+    """The same server, reached through a different hostname string.
+
+    Lets destination-scoping tests exercise "this host is not on the allowlist"
+    without standing up a second server: 127.0.0.1 and localhost both reach it,
+    but only one of them can match a given allowlist pattern at a time.
     """
+    return f"http://localhost:{_server.server_address[1]}/"
+
+
+@pytest.fixture
+def instrumented(monkeypatch):
+    """Instrument with a known source and an allowlist covering the test server,
+    and always unwrap afterwards."""
     monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-        instrumentation.instrument()
+    instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
     yield
     instrumentation.uninstrument()
 
@@ -125,8 +149,6 @@ class TestAiohttp:
         self, url, instrumented
     ):
         """The shim's ClientSession subclass triggered aiohttp's subclassing warning."""
-        import warnings
-
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
             async with aiohttp.ClientSession() as session:
@@ -134,38 +156,43 @@ class TestAiohttp:
                 assert type(session) is aiohttp.ClientSession
 
     async def test_preserves_caller_duplicate_headers(self, url, instrumented):
-        """Injecting as a pair list must not collapse a caller's duplicate headers."""
+        """Injecting as a pair list must not collapse a caller's duplicate headers.
+
+        Injection happens per-request (ClientRequest.__init__), not on the
+        session's own default headers anymore, so this checks the request that
+        actually reached the wire rather than session.headers."""
         from multidict import CIMultiDict
 
         headers = CIMultiDict([("X-Foo", "1"), ("X-Foo", "2")])
         async with aiohttp.ClientSession(headers=headers) as session:
             assert len(session.headers.getall("X-Foo")) == 2
-            assert session.headers[SOURCE_HEADER] == "stream-agent"
+            response = await session.get(url)
+            assert await response.text() == "stream-agent"
 
-    async def test_preserves_caller_headers_from_iterator(self, instrumented):
+    async def test_preserves_caller_headers_from_iterator(self, url, instrumented):
         """Inspecting a one-shot iterator must not consume its headers."""
         headers = iter([("X-Custom", "hello"), ("X-Trace", "abc123")])
 
         async with aiohttp.ClientSession(headers=headers) as session:
             assert session.headers["X-Custom"] == "hello"
             assert session.headers["X-Trace"] == "abc123"
-            assert session.headers[SOURCE_HEADER] == "stream-agent"
+            response = await session.get(url)
+            assert await response.text() == "stream-agent"
 
-    async def test_iterator_supplied_source_header_wins(self, instrumented):
+    async def test_iterator_supplied_source_header_wins(self, url, instrumented):
         """A consumed iterator must be replaced even when no injection is needed."""
         headers = iter([("X-Custom", "hello"), (SOURCE_HEADER, "caller")])
 
         async with aiohttp.ClientSession(headers=headers) as session:
             assert session.headers["X-Custom"] == "hello"
-            assert session.headers[SOURCE_HEADER] == "caller"
+            response = await session.get(url)
+            assert await response.text() == "caller"
 
 
 class TestNoOpByDefault:
     def test_no_env_var_means_no_header(self, url, monkeypatch):
         monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         try:
             assert requests.Session().get(url).text == MISSING
         finally:
@@ -173,9 +200,7 @@ class TestNoOpByDefault:
 
     def test_uninstrument_restores_original_behavior(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         assert requests.Session().get(url).text == "stream-agent"
 
         instrumentation.uninstrument()
@@ -184,11 +209,9 @@ class TestNoOpByDefault:
 
     def test_instrument_is_idempotent(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
-            instrumentation.instrument()
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         try:
             assert requests.Session().get(url).text == "stream-agent"
         finally:
@@ -196,15 +219,28 @@ class TestNoOpByDefault:
 
         assert requests.Session().get(url).text == MISSING
 
+    def test_a_later_call_still_updates_the_allowlist(self, url, monkeypatch):
+        """The method wrapping only happens once, but the allowlist itself must
+        not get stuck on whatever the first call passed -- a service that calls
+        instrument() more than once (e.g. from two separate init helpers) should
+        not have its later, intended allowlist silently ignored."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            assert requests.Session().get(url).text == MISSING
+
+            instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+            assert requests.Session().get(url).text == "stream-agent"
+        finally:
+            instrumentation.uninstrument()
+
 
 class TestMalformedEnvVar:
     """A bad env var must not be able to break the caller's traffic."""
 
     def test_trailing_newline_is_stripped(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent\n")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         try:
             assert requests.Session().get(url).text == "stream-agent"
         finally:
@@ -214,9 +250,7 @@ class TestMalformedEnvVar:
         self, url, monkeypatch
     ):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream\nagent")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         try:
             with pytest.warns(RuntimeWarning):
                 assert requests.Session().get(url).text == MISSING
@@ -224,92 +258,207 @@ class TestMalformedEnvVar:
             instrumentation.uninstrument()
 
 
-class TestLateInstrumentationWarning:
-    """Checks for already-*constructed instances*, not already-imported modules --
-    see the class docstring in instrumentation.py for why that's the check that
-    actually matches our failure mode (unlike gevent.monkey's class-rebinding
-    check, __init__-patching leaves stale class references harmless)."""
+class TestDestinationScoping:
+    """allowed_destination_hosts: only allowlisted destinations get the header,
+    fail-closed, no unrestricted mode."""
 
-    def test_warns_when_a_session_was_already_built(self, monkeypatch):
-        """A test failure here would pin `session` alive via the traceback's frame
-        references, leaking it into later tests -- so this must pass cleanly, and
-        we explicitly drop the reference and collect before returning either way."""
-        import gc
-
-        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        instrumentation.uninstrument()
-
-        session = requests.Session()  # built before instrument() -- larryyu1285's case
-        try:
-            with pytest.warns(
-                instrumentation.LateInstrumentationWarning,
-                match=r"requests\.sessions\.Session",
-            ):
-                instrumentation.instrument()
-        finally:
-            instrumentation.uninstrument()
-            session.close()
-            del session
-            gc.collect()
-
-    def test_warns_when_a_module_level_httpx_client_was_already_built(
-        self, monkeypatch
+    def test_default_allowlist_does_not_match_a_plain_loopback_host(
+        self, url, monkeypatch
     ):
-        """The exact scenario from review: a shared client declared at module level,
-        imported before instrument() runs -- httpx has no equivalent check via
-        sys.modules, this instance-scan is what closes that gap."""
-        import gc
-
+        """*-backend.svc.cluster.local is the SDK's hardcoded default -- it must
+        not accidentally match a test server that isn't on it."""
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        instrumentation.uninstrument()
-
-        vlm_client_module_level = httpx.Client()
+        instrumentation.instrument()  # no allowed_destination_hosts -> the default
         try:
-            with pytest.warns(
-                instrumentation.LateInstrumentationWarning,
-                match=r"httpx\.Client",
-            ):
-                instrumentation.instrument()
-        finally:
-            instrumentation.uninstrument()
-            vlm_client_module_level.close()
-            del vlm_client_module_level
-            gc.collect()
-
-    def test_quiet_when_modules_are_imported_but_no_instance_exists(self, monkeypatch):
-        """Merely having requests/httpx/aiohttp importable carries no signal --
-        only an actual pre-existing instance does."""
-        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        instrumentation.uninstrument()
-
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter(
-                    "error", instrumentation.LateInstrumentationWarning
-                )
-                instrumentation.instrument()
+            assert requests.Session().get(url).text == MISSING
         finally:
             instrumentation.uninstrument()
 
-    def test_quiet_for_the_sdk_clients_own_internal_httpx_client(self, monkeypatch):
-        """Client/AsyncClient set X-Request-Source unconditionally in their own
-        __init__ via source_headers(), regardless of instrument()'s timing -- so a
-        pre-existing SDK Client is not an instrumentation gap and must not warn."""
-        from visionai_sdk_python import Client
+    def test_explicit_allowlist_permits_a_named_host(self, url, instrumented):
+        assert requests.Session().get(url).text == "stream-agent"
 
+    def test_destination_outside_the_allowlist_gets_no_header(
+        self, url_localhost, instrumented
+    ):
+        assert requests.Session().get(url_localhost).text == MISSING
+
+    def test_httpx_destination_outside_the_allowlist_gets_no_header(
+        self, url_localhost, instrumented
+    ):
+        with httpx.Client() as client:
+            assert client.get(url_localhost).text == MISSING
+
+    async def test_aiohttp_destination_outside_the_allowlist_gets_no_header(
+        self, url_localhost, instrumented
+    ):
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(url_localhost)
+            assert await response.text() == MISSING
+
+    def test_caller_supplied_value_is_preserved_even_off_the_allowlist(
+        self, url_localhost, instrumented
+    ):
+        response = requests.Session().get(
+            url_localhost, headers={SOURCE_HEADER: "caller"}
+        )
+        assert response.text == "caller"
+
+    def test_escape_hatch_reaches_a_disallowed_destination(
+        self, url_localhost, instrumented
+    ):
+        """source_headers() is documented as the way to deliberately send the
+        header to a destination outside the allowlist. Its value equals
+        exactly what we'd inject ourselves, so this is the case that must not
+        be confused -- by value alone -- with our own value and stripped."""
+        response = requests.Session().get(
+            url_localhost, headers={**instrumentation.source_headers()}
+        )
+        assert response.text == "stream-agent"
+
+    async def test_httpx_escape_hatch_reaches_a_disallowed_destination(
+        self, url_localhost, instrumented
+    ):
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url_localhost, headers={**instrumentation.source_headers()}
+            )
+        assert response.text == "stream-agent"
+
+    async def test_aiohttp_escape_hatch_reaches_a_disallowed_destination(
+        self, url_localhost, instrumented
+    ):
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(
+                url_localhost, headers={**instrumentation.source_headers()}
+            )
+            assert await response.text() == "stream-agent"
+
+    def test_wildcard_pattern_matches_the_parsed_host(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.*"])
+        try:
+            assert requests.Session().get(url).text == "stream-agent"
+        finally:
+            instrumentation.uninstrument()
+
+    def test_hostname_match_is_case_insensitive(self, url_localhost, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["LOCALHOST"])
+        try:
+            assert requests.Session().get(url_localhost).text == "stream-agent"
+        finally:
+            instrumentation.uninstrument()
+
+    def test_matching_is_against_the_parsed_host_not_the_whole_url(
+        self, url, monkeypatch
+    ):
+        """A pattern that would match if we naively searched the whole URL
+        string must not match just because it appears in the path -- only the
+        parsed hostname is compared."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["*evil*"])
+        try:
+            response = requests.Session().get(url + "evil-looking-path")
+            assert response.text == MISSING
+        finally:
+            instrumentation.uninstrument()
+
+
+class TestRedirectReChecksDestinationPerHop:
+    def test_requests_allowed_to_allowed_keeps_the_header(self, url, instrumented):
+        response = requests.Session().get(_redirect(url, url))
+        assert response.text == "stream-agent"
+
+    def test_requests_allowed_to_disallowed_strips_the_header(
+        self, url, url_localhost, instrumented
+    ):
+        response = requests.Session().get(_redirect(url, url_localhost))
+        assert response.text == MISSING
+
+    def test_httpx_allowed_to_disallowed_strips_the_header(
+        self, url, url_localhost, instrumented
+    ):
+        with httpx.Client(follow_redirects=True) as client:
+            response = client.get(_redirect(url, url_localhost))
+        assert response.text == MISSING
+
+    def test_httpx_allowed_to_allowed_keeps_the_header(self, url, instrumented):
+        with httpx.Client(follow_redirects=True) as client:
+            response = client.get(_redirect(url, url))
+        assert response.text == "stream-agent"
+
+    async def test_aiohttp_allowed_to_disallowed_strips_the_header(
+        self, url, url_localhost, instrumented
+    ):
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(_redirect(url, url_localhost))
+            assert await response.text() == MISSING
+
+    async def test_aiohttp_allowed_to_allowed_keeps_the_header(self, url, instrumented):
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(_redirect(url, url))
+            assert await response.text() == "stream-agent"
+
+    def test_escape_hatch_value_survives_a_redirect_to_a_disallowed_host(
+        self, url, url_localhost, instrumented
+    ):
+        """The escape hatch is caller intent, honored for the whole chain --
+        unlike our own injected value, which a later disallowed hop strips."""
+        response = requests.Session().get(
+            _redirect(url, url_localhost),
+            headers={**instrumentation.source_headers()},
+        )
+        assert response.text == "stream-agent"
+
+
+class TestAppliesToPreexistingClients:
+    """Injection now patches a request-dispatch method looked up on the class at
+    call time (Session.send / Client._send_single_request /
+    ClientRequest.__init__), not __init__. Unlike the old construction-time
+    patch, a client built before instrument() runs is not a gap: it looks up the
+    same (now-patched) method on every call it makes afterwards, so there is no
+    "instrument() ran too late" failure mode left for these three libraries."""
+
+    def test_requests_session_built_before_instrument_is_still_instrumented(
+        self, url, monkeypatch
+    ):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
         instrumentation.uninstrument()
 
-        sdk_client = Client(auth_url="http://a.test", vlm_url="http://v.test")
+        session = requests.Session()  # built before instrument() runs
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter(
-                    "error", instrumentation.LateInstrumentationWarning
-                )
-                instrumentation.instrument()
+            instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+            assert session.get(url).text == "stream-agent"
         finally:
             instrumentation.uninstrument()
-            sdk_client._client.close()
+
+    def test_httpx_client_built_before_instrument_is_still_instrumented(
+        self, url, monkeypatch
+    ):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.uninstrument()
+
+        client = httpx.Client()  # built before instrument() runs
+        try:
+            instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+            assert client.get(url).text == "stream-agent"
+        finally:
+            instrumentation.uninstrument()
+            client.close()
+
+    async def test_aiohttp_session_built_before_instrument_is_still_instrumented(
+        self, url, monkeypatch
+    ):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.uninstrument()
+
+        async with aiohttp.ClientSession() as session:  # built before instrument()
+            try:
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+                response = await session.get(url)
+                assert await response.text() == "stream-agent"
+            finally:
+                instrumentation.uninstrument()
 
 
 class TestSdkClientCarriesHeaderNatively:
@@ -442,14 +591,27 @@ class TestCurrentOriginScope:
 
         assert results == {"a": "task-a", "b": "task-b"}
 
+    def test_shared_client_inherits_a_later_scope_without_manual_merging(
+        self, url, instrumented
+    ):
+        """Injection happens at send-time rather than construction-time, so a
+        client built once outside any scope still picks up a current_origin()
+        scope entered later, on every call made through it in that scope -- no
+        manual source_headers() merge needed for this case anymore."""
+        shared = requests.Session()  # built outside any scope
+
+        with instrumentation.current_origin("observ-pod-1"):
+            assert shared.get(url).text == "observ-pod-1"
+
+        assert shared.get(url).text == "stream-agent"
+
     def test_per_call_header_overrides_a_shared_clients_default(
         self, url, instrumented
     ):
-        """The documented workaround for a client built once and reused across many
-        requests: per-call headers already override client-level defaults."""
-        shared = (
-            requests.Session()
-        )  # built outside any scope -> defaults to "stream-agent"
+        """source_headers() remains available as an escape hatch, e.g. for
+        sending the header to a destination outside allowed_destination_hosts on
+        purpose. Per-call headers already override a client's defaults."""
+        shared = requests.Session()
 
         with instrumentation.current_origin("observ-pod-1"):
             response = shared.get(url, headers={**instrumentation.source_headers()})
@@ -483,19 +645,24 @@ class TestCurrentOriginScope:
 
         assert response.text == "stream-agent"
 
-    def test_raw_get_current_origin_as_a_header_value_is_the_bug(
+    def test_raw_get_current_origin_as_a_header_value_is_no_longer_lost_for_requests(
         self, url, instrumented
     ):
-        """Documents exactly what goes wrong if source_headers() isn't used --
-        pinned here so a future change can't quietly reintroduce the README's
-        original, broken suggestion."""
+        """This used to document a bug: requests treats a None-valued header as
+        "remove this", which used to wipe out a default baked in at construction
+        time. Now that injection happens at send-time instead, our own check
+        re-adds the header regardless -- a side effect of the same redesign that
+        fixed A-5's shared-client limitation, not something specifically
+        targeted. source_headers() is still the documented, contract-guaranteed
+        way to do this; httpx still hard-crashes on a raw None below, which this
+        pattern remains a bad idea for."""
         assert instrumentation.get_current_origin() is None
 
         shared = requests.Session()
         response = shared.get(
             url, headers={"X-Request-Source": instrumentation.get_current_origin()}
         )
-        assert response.text == MISSING  # the bug: silently no header at all
+        assert response.text == "stream-agent"
 
         async def crashes():
             async with httpx.AsyncClient() as shared_h:
@@ -518,9 +685,7 @@ class TestPodChainScenario:
         self, url, monkeypatch
     ):
         monkeypatch.setenv(SOURCE_ENV_VAR, "observ-pod-2")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         try:
             # pod-2's inbound-request handling: extract what pod-1 sent, scope it.
             inbound_headers = {SOURCE_HEADER: "observ-pod-1"}
@@ -539,9 +704,7 @@ class TestPodChainScenario:
         """Same inbound request, but pod-2's code never calls current_origin() --
         this is the A-5 gap: pod-1's identity is silently lost."""
         monkeypatch.setenv(SOURCE_ENV_VAR, "observ-pod-2")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", instrumentation.LateInstrumentationWarning)
-            instrumentation.instrument()
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
         try:
             response = requests.Session().get(url)
         finally:
