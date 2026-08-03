@@ -1,60 +1,51 @@
 """Source attribution for outbound HTTP, with no call-site changes.
 
-Call ``instrument()`` once at service startup, before any HTTP client is
-constructed::
+Call ``instrument()`` once at service startup::
 
     from visionai_sdk_python import instrumentation
     instrumentation.instrument()
 
-Every ``requests.Session``, ``httpx.Client``/``AsyncClient`` and
-``aiohttp.ClientSession`` built after that carries ``X-Request-Source``,
-including ones built by third-party code we cannot edit, and the module-level
-one-shots (``requests.get()``) that create a client internally.
+Every request through ``requests``, ``httpx`` (sync and async) and ``aiohttp``
+then carries ``X-Request-Source`` -- including third-party code, module-level
+one-shots (``requests.get()``), and clients built before ``instrument()`` ran,
+since injection patches a request-dispatch method on the class rather than
+``__init__``.
 
-The real classes are wrapped in place rather than subclassed or shadowed, so
-``isinstance``, exception identity and the libraries' public APIs are untouched.
+**Destination scoping.** Only hosts matching ``allowed_destination_hosts``
+(default ``*-backend.svc.cluster.local``) get the header; everything else
+(Stripe, an external webhook, ...) is untouched. Fail-closed, no "all
+destinations" mode -- opt in explicitly::
+
+    instrumentation.instrument(
+        allowed_destination_hosts=["vlm-inference-server", "*.svc.cluster.local"],
+    )
+
+Re-checked on every hop, so a redirect leaving the allowlist stops carrying the
+header instead of leaking it onward.
 
 **Forwarding an inherited origin (A-5).** By default this stamps the local
-service's own identity — correct as long as a service is the true origin of
-whatever VLM call it makes. If service A calls service B (both instrumented)
-and B then calls VLM on A's behalf, B should forward A's identity rather than
-stamp its own, the same problem ``visionai-vlm-scheduling-service`` solves for
-its Redis queue hop by explicitly storing and re-attaching the header. Use
-``current_origin()``/``origin_from_headers()`` from your own inbound-request
-middleware::
-
-    from visionai_sdk_python import instrumentation
+service's own identity. If service B calls VLM on behalf of service A, B
+should forward A's identity instead -- use ``current_origin()``/
+``origin_from_headers()`` from your inbound-request middleware::
 
     origin = instrumentation.origin_from_headers(incoming_request.headers)
     with instrumentation.current_origin(origin):
-        ...  # handle the request; a client built in this scope inherits `origin`
+        ...  # any outbound call made in this scope inherits it
 
-This makes forwarding automatic for a client built fresh inside that scope
-(``instrument()``'s injection already runs at construction time and now checks
-the current scope first). A client built once at startup and reused across many
-requests can't pick up a value that varies per request just by being
-instrumented — merge ``source_headers()`` into the per-call headers on outbound
-calls made in that scope instead::
-
-    response = shared_client.get(url, headers={**instrumentation.source_headers(), **other_headers})
-
-``source_headers()`` returns ``{"X-Request-Source": value}`` (inherited origin,
-falling back to this service's own identity — the same resolution
-``instrument()``'s automatic injection uses) or ``{}`` if there is nothing to
-send. Per-call headers already override a client's defaults in requests/httpx/
-aiohttp, so no extra mechanism is needed for that case. **Do not** pass
-``get_current_origin()`` directly as a header value — it legitimately returns
-``None`` whenever there is no inherited origin (the common case, meaning this
-service is the origin), and both libraries handle a ``None`` header value
-badly: ``requests`` silently drops it, discarding the client's own correctly-set
-default in the process, and ``httpx`` raises ``TypeError``. See "A-5" in the
+Injection runs per-request rather than at client construction, so this works
+even through a client built once at startup and reused across many requests.
+``source_headers()`` is an escape hatch for sending the header to a
+destination outside ``allowed_destination_hosts`` on purpose -- returns
+``{"X-Request-Source": value}`` or ``{}``. Don't pass ``get_current_origin()``
+directly as a header value: it's ``None`` outside any scope, and ``httpx``
+raises ``TypeError`` on a ``None``-valued header. See "A-5" in the
 service-source-attribution plan.
 """
 
-import gc
-import sys
-import warnings
+import contextvars
+import fnmatch
 from typing import Any
+from urllib.parse import urlsplit
 
 import wrapt
 
@@ -74,171 +65,219 @@ __all__ = [
     "get_current_origin",
     "origin_from_headers",
     "source_headers",
-    "LateInstrumentationWarning",
 ]
 
 _instrumented = False
 
+# Fail-closed: a service that calls instrument() with no argument only gets
+# the header injected on its own cluster-internal backends. There is
+# deliberately no "match everything" mode -- a service that needs a different
+# set names it explicitly via allowed_destination_hosts.
+_DEFAULT_ALLOWED_DESTINATION_HOSTS: tuple[str, ...] = ("*-backend.svc.cluster.local",)
 
-def _already_set(headers: Any) -> bool:
-    pairs = list(headers.items()) if hasattr(headers, "items") else list(headers or [])
-    return any(key.lower() == SOURCE_HEADER.lower() for key, _ in pairs)
+_allowed_destination_hosts: tuple[str, ...] = _DEFAULT_ALLOWED_DESTINATION_HOSTS
 
 
-def _set_after_init(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-    """For clients exposing a mutable public ``.headers`` (requests, httpx).
+def _extract_host(url: Any) -> str | None:
+    """The hostname component of a URL, via a real URL parser.
 
-    Reads ``_effective_source()`` at construction time, so a client built inside
-    a ``current_origin()`` scope picks up the inherited value rather than this
-    service's own — see "Forwarding an inherited origin" above.
+    Handles ``requests``' plain string URLs, ``httpx.URL`` and ``yarl.URL``
+    (both expose ``.host`` already parsed out) uniformly, rather than doing any
+    string matching against the whole URL -- which a path or query string could
+    spoof (e.g. a URL to ``evil.example`` with ``vlm-scheduling-service``
+    somewhere in its path).
     """
-    result = wrapped(*args, **kwargs)
-
-    source = _effective_source()
-    if source and not _already_set(instance.headers):
-        instance.headers[SOURCE_HEADER] = source
-
-    return result
+    host = getattr(url, "host", None)
+    if host is None:
+        host = urlsplit(str(url)).hostname
+    return host.lower() if host else None
 
 
-def _set_via_init_kwarg(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-    """For aiohttp, whose default headers can only be set through ``__init__``.
+def _destination_allowed(url: Any) -> bool:
+    host = _extract_host(url)
+    if host is None:
+        return False
+    return any(
+        fnmatch.fnmatchcase(host, pattern.lower())
+        for pattern in _allowed_destination_hosts
+    )
+
+
+def _find_pair(pairs: list[tuple[str, str]]) -> str | None:
+    for key, value in pairs:
+        if key.lower() == SOURCE_HEADER.lower():
+            return value
+    return None
+
+
+# A caller-supplied value (including the source_headers() escape hatch, which
+# legitimately equals what we'd inject ourselves) must never be touched, on
+# any hop or destination -- but that value is indistinguishable from our own
+# by content alone, since both are the same string. So "did *we* put this
+# header there" has to be tracked out of band, not inferred from the value.
+# Each library carries a hop's headers into the next redirect differently,
+# which is why the tracking mechanism below differs per library; the policy
+# itself (never touch a caller's value; add when allowed and absent; remove
+# our own value when the destination is no longer allowed) is the same one
+# in all three.
+
+_EXTENSION_KEY = "visionai_sdk_python.source_header_injected"
+
+
+def _inject_aiohttp_request(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+    """``aiohttp.ClientRequest.__init__`` -- ``ClientSession._request`` builds a
+    fresh ``ClientRequest`` for the initial dispatch and again, with the
+    redirect's URL, for every subsequent hop, all inside one ``while`` loop,
+    always from the *original*, unmodified ``headers`` local variable (our own
+    injection below only ever materializes a new pairs list passed into that
+    one call, never mutates it) -- so a header present at any hop can only be
+    something the caller put there, and no provenance tracking is needed here.
 
     Passing a list of pairs rather than a dict keeps any duplicate headers the
-    caller supplied. This is also the one injection vehicle ``aioresponses``
-    can see, which a ``TraceConfig``-based approach cannot offer.
+    caller supplied, and is also the one injection vehicle ``aioresponses`` can
+    see, which a ``TraceConfig``-based approach cannot offer.
     """
-    source = _effective_source()
-    if source:
-        headers = kwargs.get("headers")
-        pairs = (
-            list(headers.items()) if hasattr(headers, "items") else list(headers or [])
-        )
-        if not _already_set(pairs):
+    url = args[1] if len(args) > 1 else kwargs.get("url")
+    headers = kwargs.get("headers")
+    pairs = list(headers.items()) if hasattr(headers, "items") else list(headers or [])
+
+    existing = _find_pair(pairs)
+    if existing is None:
+        source = _effective_source()
+        if source and _destination_allowed(url):
             pairs.append((SOURCE_HEADER, source))
-        # Always pass the materialized pairs onward. If ``headers`` was a
-        # one-shot iterable, inspecting it above consumed the original even
-        # when it already contained SOURCE_HEADER.
-        kwargs["headers"] = pairs
+
+    # Always pass the materialized pairs onward. If `headers` was a one-shot
+    # iterable, inspecting it above consumed the original even when nothing
+    # about it needs to change.
+    kwargs["headers"] = pairs
 
     return wrapped(*args, **kwargs)
+
+
+_requests_dispatch_state: contextvars.ContextVar[dict[str, bool] | None] = (
+    contextvars.ContextVar("visionai_requests_dispatch_state", default=None)
+)
+
+
+def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+    """``requests.Session.send`` -- called for the initial dispatch and, via
+    ``resolve_redirects``, recursively again for every redirect hop, nested
+    inside this same (not-yet-returned) call. ``PreparedRequest.copy()`` carries
+    a hop's headers into the next one, so a dict threaded through a contextvar
+    across that recursion remembers whether *we* set the header on an earlier
+    hop of this chain: only the outermost call creates it and only the
+    outermost call's ``finally`` tears it down, so every nested hop sees the
+    same dict.
+    """
+    request = args[0] if args else kwargs.get("request")
+    if request is None:
+        return wrapped(*args, **kwargs)
+
+    state = _requests_dispatch_state.get()
+    token = None
+    if state is None:
+        state = {"we_injected": False}
+        token = _requests_dispatch_state.set(state)
+
+    try:
+        source = _effective_source()
+        existing = request.headers.get(SOURCE_HEADER)
+
+        if existing is not None and not state["we_injected"]:
+            pass  # caller-supplied (this hop or an earlier one); never touched
+        elif source and _destination_allowed(request.url):
+            request.headers[SOURCE_HEADER] = source
+            state["we_injected"] = True
+        elif existing is not None:
+            del request.headers[SOURCE_HEADER]
+            state["we_injected"] = False
+
+        return wrapped(*args, **kwargs)
+    finally:
+        if token is not None:
+            _requests_dispatch_state.reset(token)
+
+
+def _apply_httpx_scoping(request: Any) -> None:
+    """httpx: ``request.extensions`` is passed *by reference* into the next
+    hop's ``Request`` by ``_build_redirect_request``, so it survives exactly
+    the hops of one chain and nothing else -- the same role
+    ``_requests_dispatch_state`` plays via a contextvar, except carried on the
+    request object itself, since httpx's redirect loop calls
+    ``_send_single_request`` repeatedly at the same call-stack depth (not
+    nested like requests' recursive ``Session.send``), so a contextvar reset on
+    return wouldn't survive between hops the way it does there.
+    """
+    source = _effective_source()
+    existing = request.headers.get(SOURCE_HEADER)
+    we_injected = request.extensions.get(_EXTENSION_KEY, False)
+
+    if existing is not None and not we_injected:
+        return  # caller-supplied (this hop or an earlier one); never touched
+
+    if source and _destination_allowed(request.url):
+        request.headers[SOURCE_HEADER] = source
+        request.extensions[_EXTENSION_KEY] = True
+    elif existing is not None:
+        del request.headers[SOURCE_HEADER]
+        request.extensions[_EXTENSION_KEY] = False
+
+
+def _inject_httpx_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+    """``httpx.Client._send_single_request`` -- unlike ``Client.send``, this runs
+    once per hop: the redirect loop in ``_send_handling_redirects`` calls it
+    again for each redirect with a freshly-built request."""
+    request = args[0] if args else kwargs.get("request")
+    if request is not None:
+        _apply_httpx_scoping(request)
+    return wrapped(*args, **kwargs)
+
+
+async def _inject_httpx_send_async(
+    wrapped: Any, instance: Any, args: Any, kwargs: Any
+) -> Any:
+    """``httpx.AsyncClient._send_single_request`` -- the async twin of the above."""
+    request = args[0] if args else kwargs.get("request")
+    if request is not None:
+        _apply_httpx_scoping(request)
+    return await wrapped(*args, **kwargs)
 
 
 # (module, attribute path, wrapper). Missing modules are skipped: requests and
 # aiohttp are optional extras, httpx is a core dependency.
 _TARGETS = (
-    ("requests", "Session.__init__", _set_after_init),
-    ("httpx", "Client.__init__", _set_after_init),
-    ("httpx", "AsyncClient.__init__", _set_after_init),
-    ("aiohttp", "ClientSession.__init__", _set_via_init_kwarg),
+    ("requests", "Session.send", _inject_requests_send),
+    ("httpx", "Client._send_single_request", _inject_httpx_send),
+    ("httpx", "AsyncClient._send_single_request", _inject_httpx_send_async),
+    ("aiohttp", "ClientRequest.__init__", _inject_aiohttp_request),
 )
 
 
-class LateInstrumentationWarning(RuntimeWarning):
-    """Raised when instrument() runs after a client was already constructed.
+def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
+    """Wrap the installed HTTP clients' request-dispatch methods. Safe to call
+    more than once: the wrapping itself only happens the first time (calling it
+    again would double-wrap the same methods), but ``allowed_destination_hosts``
+    is applied every time, so a later call can still update it.
 
-    Wrapping ``__init__`` cannot retrofit a client built before this point, so
-    it silently never carries ``X-Request-Source``, and this is the only signal
-    that happened.
-
-    This is *not* the same check ``gevent.monkey``'s ``MonkeyPatchWarning``
-    does, despite the similar spirit. gevent's ``patch_ssl()`` *rebinds*
-    ``ssl.SSLContext`` to a different class, so it scans already-imported
-    modules for a stale reference to the pre-patch class (via ``gc.get_referrers``)
-    — a real, forward-looking risk, since anything built later from that stale
-    reference stays broken forever. We patch ``__init__`` in place; the class
-    object's identity never changes, so a module holding
-    ``from httpx import Client`` from before ``instrument()`` ran is completely
-    fine for anything it constructs afterward — Python looks up ``__init__`` on
-    the class at call time, and we mutated the class's own attribute. Our risk
-    is purely backward-looking: an instance built *before* the patch landed. So
-    instead we scan for already-*existing instances* via ``gc.get_objects()``,
-    which is the check that actually matches our failure mode.
+    ``allowed_destination_hosts`` gates which destinations receive
+    ``X-Request-Source``; hostnames are matched via ``fnmatch`` glob patterns
+    against the parsed URL host (case-insensitive), so ``*.svc.cluster.local``
+    or ``*-backend.svc.cluster.local`` work as expected. Defaults to
+    :data:`_DEFAULT_ALLOWED_DESTINATION_HOSTS` when omitted -- there is no
+    "match everything" option; a service that needs a broader or different set
+    must name it explicitly.
     """
+    global _instrumented, _allowed_destination_hosts
 
-
-def _owned_by_sdk_client(obj: Any) -> bool:
-    """True if `obj` is the internal httpx client of our own Client/AsyncClient.
-
-    Those get X-Request-Source from source_headers() directly in __init__,
-    unconditionally — not through instrument()'s wrapt patching at all — so their
-    attribution never depends on instrument()'s timing and this is not a gap.
-    """
-    from . import async_client as _async_client_module
-    from . import client as _client_module
-
-    for ref in gc.get_referrers(obj):
-        if isinstance(ref, (_client_module.Client, _async_client_module.AsyncClient)):
-            if getattr(ref, "_client", None) is obj:
-                return True
-    return False
-
-
-def _find_preexisting_clients() -> dict[str, int]:
-    """Count already-built instances of the classes instrument() is about to wrap.
-
-    Runs once at instrument()-time, before patching; the one-time cost of a full
-    heap scan is a startup-time concern, not a request-path one.
-    """
-    target_classes = []
-    for module_name, class_name in (
-        ("requests", "Session"),
-        ("httpx", "Client"),
-        ("httpx", "AsyncClient"),
-        ("aiohttp", "ClientSession"),
-    ):
-        module = sys.modules.get(module_name)
-        if module is not None:
-            target_classes.append(getattr(module, class_name))
-
-    if not target_classes:
-        return {}
-
-    counts: dict[str, int] = {}
-    for obj in gc.get_objects():
-        try:
-            is_target = isinstance(obj, tuple(target_classes))
-        except ReferenceError:
-            continue
-        if not is_target or _owned_by_sdk_client(obj):
-            continue
-        name = f"{type(obj).__module__}.{type(obj).__qualname__}"
-        counts[name] = counts.get(name, 0) + 1
-
-    return counts
-
-
-def _warn_if_late() -> None:
-    preexisting = _find_preexisting_clients()
-    if not preexisting:
-        return
-
-    described = ", ".join(
-        f"{name} (×{count})" if count > 1 else name
-        for name, count in preexisting.items()
-    )
-    warnings.warn(
-        f"instrument() called after these clients were already constructed: "
-        f"{described}. They were built before instrument() could wrap their "
-        f"__init__ and do not carry {SOURCE_HEADER}; clients built from now on "
-        "are unaffected. Call instrument() at the top of the service "
-        "entrypoint, before importing anything that builds an HTTP client.",
-        LateInstrumentationWarning,
-        stacklevel=3,
+    _allowed_destination_hosts = (
+        tuple(allowed_destination_hosts)
+        if allowed_destination_hosts is not None
+        else _DEFAULT_ALLOWED_DESTINATION_HOSTS
     )
 
-
-def instrument() -> None:
-    """Wrap the installed HTTP clients. Idempotent; safe to call once at startup.
-
-    Must run before any HTTP client is constructed — see
-    :class:`LateInstrumentationWarning`.
-    """
-    global _instrumented
     if _instrumented:
         return
-
-    _warn_if_late()
 
     for module, target, wrapper in _TARGETS:
         try:
