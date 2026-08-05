@@ -126,7 +126,7 @@ def get_current_origin() -> str | None:
 
 
 def _effective_source() -> str | None:
-    """What to inject: an inherited origin from the current request, else our own."""
+    """What to inject: last hop (our own identity) unless A-5 set an inherited origin."""
     inherited = get_current_origin()
     if inherited is not None:
         return inherited
