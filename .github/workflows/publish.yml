@@ -25,6 +25,15 @@ jobs:
         with:
           python-version-file: "pyproject.toml"
 
+      - name: Install locked dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Run package checks
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest
+
       - name: Build package
         run: uv build
 
