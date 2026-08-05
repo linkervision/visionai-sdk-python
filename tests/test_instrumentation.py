@@ -5,8 +5,10 @@ received, so what is asserted is what actually went out on the wire rather than
 what some layer of the client thought it was going to send.
 """
 
+import builtins
 import http.server
 import socketserver
+import sys
 import threading
 import urllib.parse
 import warnings
@@ -20,6 +22,27 @@ from visionai_sdk_python import instrumentation
 from visionai_sdk_python._source_header import SOURCE_ENV_VAR, SOURCE_HEADER
 
 MISSING = "MISSING"
+
+
+class TestMissingWraptDependency:
+    def test_import_error_message_mentions_extra(self, monkeypatch):
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "wrapt":
+                raise ImportError("No module named 'wrapt'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        monkeypatch.delitem(sys.modules, "wrapt", raising=False)
+        monkeypatch.delitem(
+            sys.modules, "visionai_sdk_python.instrumentation", raising=False
+        )
+
+        with pytest.raises(
+            ImportError, match="visionai-sdk-python\\[instrumentation\\]"
+        ):
+            import visionai_sdk_python.instrumentation  # noqa: F401
 
 
 class _EchoHandler(http.server.BaseHTTPRequestHandler):
