@@ -415,6 +415,24 @@ on a `None`-valued header.
 
 ### Behavior
 
+- **`X-Request-Source` means last hop, not origin, by default.** Without A-5
+  set up, it names whichever service called *this* service directly — not
+  the request's ultimate origin. A service that wants origin tracking across
+  hops opts in explicitly via `current_origin()`/`origin_from_headers()` (see
+  "If your service is called by another instrumented service" above); nothing
+  here infers origin automatically. This is a deliberate scope decision, not
+  a limitation to work around: zero-config attribution ("who called me") is
+  enough for most consumers, and origin tracking is opt-in because it needs a
+  service to actually wire up inbound middleware, which not every consumer
+  will do.
+- **Division of labor with `User-Agent`:** this SDK doesn't set `User-Agent`
+  at all. If your service's own UA convention already names the caller +
+  version for hop-by-hop debugging/logging, that's a separate, orthogonal
+  concern from `X-Request-Source` — UA answers "who's on the other end of
+  this specific hop", `X-Request-Source` answers "who should this be
+  attributed to" (last hop by default, origin if A-5 is set up). Don't rely
+  on UA for attribution: it's compound and free-form, not designed to be
+  parsed into a stable label, and proxies may rewrite it.
 - If `VISIONAI_SERVICE_SOURCE` is unset, no header is added — fully backward
   compatible.
 - Only destinations matching `allowed_destination_hosts` get the header — fail
