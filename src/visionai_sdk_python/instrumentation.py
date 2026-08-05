@@ -1,9 +1,12 @@
 """Source attribution for outbound HTTP, with no call-site changes.
 
-Call ``instrument()`` once at service startup::
+Call ``instrument()`` once at service startup, naming the destinations that
+should receive the header::
 
     from visionai_sdk_python import instrumentation
-    instrumentation.instrument()
+    instrumentation.instrument(
+        allowed_destination_hosts=["vlm-inference-server", "*.svc.cluster.local"],
+    )
 
 Every request through ``requests``, ``httpx`` (sync and async) and ``aiohttp``
 then carries ``X-Request-Source`` -- including third-party code, module-level
@@ -11,18 +14,20 @@ one-shots (``requests.get()``), and clients built before ``instrument()`` ran,
 since injection patches a request-dispatch method on the class rather than
 ``__init__``.
 
-**Destination scoping.** Only hosts matching ``allowed_destination_hosts``
-(default covers ``vlm-inference-server``, ``vlm-scheduling-service``, and
-``*.svc.cluster.local``) get the header; everything else (Stripe, an external
-webhook, ...) is untouched. Fail-closed, no "all destinations" mode -- opt in
-explicitly::
-
-    instrumentation.instrument(
-        allowed_destination_hosts=["vlm-inference-server", "*.svc.cluster.local"],
-    )
+**Destination scoping.** ``allowed_destination_hosts`` is required on the
+first call -- there is no default, and no "all destinations" mode. Guessing a
+default that doesn't match a service's actual hosts would silently inject
+nothing, indistinguishable from attribution simply not being wired up; a
+service instead states explicitly which destinations should carry the header,
+so a mismatch either fails immediately (see below) or fails loudly (the
+process-lifetime warning below). Everything outside the list -- Stripe, an
+external webhook, ... -- is untouched.
 
 Re-checked on every hop, so a redirect leaving the allowlist stops carrying the
-header instead of leaking it onward.
+header instead of leaking it onward. If, over the life of the process, no
+destination ever matched the allowlist, a ``RuntimeWarning`` fires at
+interpreter shutdown -- "attribution has no data" and "the allowlist is wrong"
+would otherwise look identical in production.
 
 **Forwarding an inherited origin (A-5).** By default this stamps the local
 service's own identity. If service B calls VLM on behalf of service A, B
@@ -43,6 +48,7 @@ raises ``TypeError`` on a ``None``-valued header. See "A-5" in the
 service-source-attribution plan.
 """
 
+import atexit
 import contextvars
 import fnmatch
 import warnings
@@ -74,27 +80,53 @@ __all__ = [
     "get_current_origin",
     "origin_from_headers",
     "source_headers",
+    "SUGGESTED_ALLOWED_DESTINATION_HOSTS",
 ]
 
 _instrumented = False
 
-# Fail-closed: a service that calls instrument() with no argument only gets
-# the header injected on its own cluster-internal backends. There is
-# deliberately no "match everything" mode -- a service that needs a different
-# set names it explicitly via allowed_destination_hosts.
-#
-# Named explicitly rather than relying on a single glob: "*-backend.svc.cluster.local"
-# alone doesn't match the actual current VLM targets (vlm-inference-server,
-# vlm-scheduling-service), which would make the out-of-the-box default silently
-# inject nothing for the primary use case, with no signal that it didn't.
-_DEFAULT_ALLOWED_DESTINATION_HOSTS: tuple[str, ...] = (
+# A starting point services can pass explicitly -- not applied automatically.
+# There is no default and no "match everything" mode: guessing one that
+# doesn't match a service's real hosts would silently inject nothing, which
+# looks identical to attribution never having been wired up at all.
+SUGGESTED_ALLOWED_DESTINATION_HOSTS: tuple[str, ...] = (
     "vlm-inference-server",
     "vlm-scheduling-service",
     "*-backend.svc.cluster.local",
     "*.svc.cluster.local",
 )
 
-_allowed_destination_hosts: tuple[str, ...] = _DEFAULT_ALLOWED_DESTINATION_HOSTS
+_allowed_destination_hosts: tuple[str, ...] = ()
+
+# Process-lifetime "did we ever actually inject the header" tracking -- catches
+# an allowlist that's syntactically fine but never matches anything the
+# service actually calls, which otherwise looks identical to "attribution has
+# no data for some other reason" until someone thinks to check the allowlist.
+_ever_matched_destination = False
+_saw_any_dispatch = False
+_lifetime_check_registered = False
+
+
+def _note_dispatch(matched: bool) -> None:
+    global _ever_matched_destination, _saw_any_dispatch
+    _saw_any_dispatch = True
+    if matched:
+        _ever_matched_destination = True
+
+
+def _warn_if_never_matched() -> None:
+    """Registered via atexit; also called directly by tests since atexit
+    hooks are unreliable to trigger and observe from within a test process."""
+    if _saw_any_dispatch and not _ever_matched_destination:
+        warnings.warn(
+            f"visionai_sdk_python: instrument() was called and requests were "
+            f"made, but allowed_destination_hosts {_allowed_destination_hosts!r} "
+            f"never matched any destination -- {SOURCE_HEADER} was never sent. "
+            "This usually means the allowlist doesn't match the service's "
+            "actual outbound hosts.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 def _extract_host(url: Any) -> str | None:
@@ -114,12 +146,12 @@ def _extract_host(url: Any) -> str | None:
 
 def _destination_allowed(url: Any) -> bool:
     host = _extract_host(url)
-    if host is None:
-        return False
-    return any(
+    matched = host is not None and any(
         fnmatch.fnmatchcase(host, pattern.lower())
         for pattern in _allowed_destination_hosts
     )
+    _note_dispatch(matched)
+    return matched
 
 
 def _find_pair(pairs: list[tuple[str, str]]) -> str | None:
@@ -192,6 +224,13 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
     independent request. Keying state by that id, inside a per-context dict,
     means a hook's own call gets fresh state instead of incorrectly inheriting
     "we_injected" from the chain it happened to fire during.
+
+    Only ever mutates a ``.copy()`` of the caller's request, never the object
+    they passed in -- mutating it directly left an observable side effect on
+    the caller's own ``PreparedRequest``, and one that outlives a single
+    ``send()``: reusing that same object for a later, unrelated call (mutate
+    ``.url``, call ``send()`` again) would see our earlier value as "already
+    there", indistinguishable from something the caller set themselves.
     """
     request = args[0] if args else kwargs.get("request")
     if request is None:
@@ -214,12 +253,18 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
         if existing is not None and not state["we_injected"]:
             pass  # caller-supplied (this hop or an earlier one); never touched
         elif source and _destination_allowed(request.url):
+            request = request.copy()
             request.headers[SOURCE_HEADER] = source
             state["we_injected"] = True
         elif existing is not None:
+            request = request.copy()
             del request.headers[SOURCE_HEADER]
             state["we_injected"] = False
 
+        if args:
+            args = (request, *args[1:])
+        else:
+            kwargs["request"] = request
         return wrapped(*args, **kwargs)
     finally:
         if is_new_chain:
@@ -296,17 +341,27 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
     ``allowed_destination_hosts`` gates which destinations receive
     ``X-Request-Source``; hostnames are matched via ``fnmatch`` glob patterns
     against the parsed URL host (case-insensitive), so ``*.svc.cluster.local``
-    or ``*-backend.svc.cluster.local`` work as expected. Defaults to
-    :data:`_DEFAULT_ALLOWED_DESTINATION_HOSTS` on the first call when omitted
-    -- there is no "match everything" option; a service that needs a broader
-    or different set must name it explicitly.
+    or ``*-backend.svc.cluster.local`` work as expected.
+
+    Required on the first call -- there is no default and no "match
+    everything" option. See :data:`SUGGESTED_ALLOWED_DESTINATION_HOSTS` for a
+    starting point to pass explicitly.
+
+    Raises:
+        ValueError: if this is the first call and ``allowed_destination_hosts``
+            was omitted.
     """
-    global _instrumented, _allowed_destination_hosts
+    global _instrumented, _allowed_destination_hosts, _lifetime_check_registered
 
     if allowed_destination_hosts is not None:
         _allowed_destination_hosts = tuple(allowed_destination_hosts)
     elif not _instrumented:
-        _allowed_destination_hosts = _DEFAULT_ALLOWED_DESTINATION_HOSTS
+        raise ValueError(
+            "instrument() requires allowed_destination_hosts on the first "
+            "call -- there is no default, so name the destinations that "
+            "should receive X-Request-Source explicitly (see "
+            "SUGGESTED_ALLOWED_DESTINATION_HOSTS for a starting point)."
+        )
 
     if _instrumented:
         return
@@ -327,12 +382,17 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
             )
             continue
 
+    if not _lifetime_check_registered:
+        atexit.register(_warn_if_never_matched)
+        _lifetime_check_registered = True
+
     _instrumented = True
 
 
 def uninstrument() -> None:
     """Restore the original clients. Mainly for test isolation."""
-    global _instrumented
+    global _instrumented, _allowed_destination_hosts
+    global _ever_matched_destination, _saw_any_dispatch
     if not _instrumented:
         return
 
@@ -354,3 +414,6 @@ def uninstrument() -> None:
             setattr(cls, attr, original)
 
     _instrumented = False
+    _allowed_destination_hosts = ()
+    _ever_matched_destination = False
+    _saw_any_dispatch = False

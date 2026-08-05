@@ -98,6 +98,24 @@ class TestRequests:
 
         assert session.send(prepared).text == "stream-agent"
 
+    def test_send_does_not_mutate_the_callers_prepared_request(
+        self, url, url_localhost, instrumented
+    ):
+        """Regression: injection used to mutate request.headers in place. That
+        left our value sitting on the caller's own PreparedRequest after
+        send() returned, so reusing that same object for a second, unrelated
+        send() (a legitimate requests pattern -- mutate .url, send again) saw
+        our earlier value and mistook it for something the caller had set,
+        keeping it even once the destination was no longer allowed."""
+        session = requests.Session()
+        prepared = session.prepare_request(requests.Request("GET", url))
+
+        assert session.send(prepared).text == "stream-agent"
+        assert SOURCE_HEADER not in prepared.headers  # caller's object untouched
+
+        prepared.url = url_localhost  # not on the allowlist
+        assert session.send(prepared).text == MISSING
+
     def test_caller_supplied_value_wins(self, url, instrumented):
         session = requests.Session()
 
@@ -304,17 +322,12 @@ class TestDestinationScoping:
     """allowed_destination_hosts: only allowlisted destinations get the header,
     fail-closed, no unrestricted mode."""
 
-    def test_default_allowlist_does_not_match_a_plain_loopback_host(
-        self, url, monkeypatch
-    ):
-        """*-backend.svc.cluster.local is the SDK's hardcoded default -- it must
-        not accidentally match a test server that isn't on it."""
-        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        instrumentation.instrument()  # no allowed_destination_hosts -> the default
-        try:
-            assert requests.Session().get(url).text == MISSING
-        finally:
-            instrumentation.uninstrument()
+    def test_first_call_without_a_list_raises(self, monkeypatch):
+        """No default, no "match everything" -- a service must decide. Guessing
+        one that doesn't match a service's real hosts would silently inject
+        nothing, indistinguishable from attribution never being wired up."""
+        with pytest.raises(ValueError, match="allowed_destination_hosts"):
+            instrumentation.instrument()
 
     def test_explicit_allowlist_permits_a_named_host(self, url, instrumented):
         assert requests.Session().get(url).text == "stream-agent"
@@ -402,6 +415,44 @@ class TestDestinationScoping:
         try:
             response = requests.Session().get(url + "evil-looking-path")
             assert response.text == MISSING
+        finally:
+            instrumentation.uninstrument()
+
+
+class TestLifetimeNeverMatchedWarning:
+    """A syntactically fine allowlist that never matches anything the service
+    actually calls looks identical, from the outside, to attribution simply
+    having no data for some other reason -- _warn_if_never_matched() is the
+    signal that tells them apart. Registered via atexit for real usage; called
+    directly here since atexit hooks aren't reliably observable from within
+    the same test process."""
+
+    def test_warns_when_nothing_ever_matched(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            requests.Session().get(url)  # dispatched, but doesn't match
+            with pytest.warns(RuntimeWarning, match="never matched"):
+                instrumentation._warn_if_never_matched()
+        finally:
+            instrumentation.uninstrument()
+
+    def test_no_warning_once_something_matched(self, url, instrumented):
+        requests.Session().get(
+            url
+        )  # matches -- allowed_destination_hosts=["127.0.0.1"]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            instrumentation._warn_if_never_matched()  # must not raise/warn
+
+    def test_no_warning_if_nothing_was_ever_dispatched(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                instrumentation._warn_if_never_matched()  # no requests made at all
         finally:
             instrumentation.uninstrument()
 

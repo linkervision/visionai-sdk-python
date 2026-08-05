@@ -269,16 +269,15 @@ here's the checklist:
    )
    ```
 
-3. **Don't assume the default covers you.** Omitting
-   `allowed_destination_hosts` falls back to the SDK's built-in default —
-   `vlm-inference-server`, `vlm-scheduling-service`, and any host matching
-   `*-backend.svc.cluster.local` or `*.svc.cluster.local`. If your service
-   calls something else (a different internal service, a non-standard
-   hostname), that default won't match: `instrument()` still runs without
-   error, but `X-Request-Source` silently never goes out anywhere for that
-   destination, which looks identical to "it's not working" with no error to
-   point at. Pass your own list explicitly whenever you're not sure the
-   default covers every host you call.
+3. **There is no default — `allowed_destination_hosts` is required on the
+   first call.** Omitting it raises `ValueError`. This is deliberate: a
+   built-in default that happened not to match your service's real hosts
+   would let `instrument()` run without error while `X-Request-Source`
+   silently never went out anywhere, which looks identical to "it's not
+   working" with no error to point at. `instrumentation.
+   SUGGESTED_ALLOWED_DESTINATION_HOSTS` is a reasonable starting point
+   (`vlm-inference-server`, `vlm-scheduling-service`, `*.svc.cluster.local`,
+   ...) if you want to pass it explicitly rather than typing out your own list.
 4. If in doubt about what your service actually calls, check the host in the
    URLs you pass to `requests`/`httpx`/`aiohttp` today — that's exactly what
    `allowed_destination_hosts` needs to match.
@@ -288,7 +287,12 @@ detail.
 
 ### Using `Client` / `AsyncClient`
 
-Nothing to do. The SDK's own clients pick the variable up automatically.
+Nothing to do. The SDK's own clients pick the variable up automatically, fresh
+on every request — including a later `current_origin()` scope (A-5), with no
+manual header merging needed. If the service also calls `instrument()`, the
+client's own injection cooperates with it correctly (same destination scoping
+applies to the client's own calls too, not just direct `requests`/`httpx`/
+`aiohttp` use).
 
 ### Using `requests` / `httpx` / `aiohttp` directly
 
@@ -329,10 +333,11 @@ for free. Patterns are matched against the parsed URL's hostname (case
 insensitive, `fnmatch`-style globs, e.g. `*.svc.cluster.local`), never against
 the raw URL string, so a host can't be spoofed via path or query string.
 
-If `allowed_destination_hosts` is omitted, it defaults to
-`vlm-inference-server`, `vlm-scheduling-service`, `*-backend.svc.cluster.local`,
-and `*.svc.cluster.local`. Pass your own list to use a different or additional
-set of hosts.
+`allowed_destination_hosts` is required on the first call — see the checklist
+above. If, over the life of the process, no destination ever matches the
+allowlist, a `RuntimeWarning` fires at interpreter shutdown: a wrong allowlist
+and "attribution has no data for some other reason" would otherwise be
+indistinguishable in production.
 
 The check re-runs on every hop, including redirects: a request to an
 allowlisted host that gets redirected somewhere else stops carrying the header

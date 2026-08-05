@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-requests = ["requests>=2.31"]
-aiohttp = ["aiohttp>=3.9"]
+requests = ["requests>=2.31,<3"]
+aiohttp = ["aiohttp>=3.9,<4"]
 instrumentation = ["wrapt>=1.16,<3"]
 
 [build-system]

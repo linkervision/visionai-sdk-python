@@ -1075,12 +1075,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'aiohttp'", specifier = ">=3.9" },
+    { name = "aiohttp", marker = "extra == 'aiohttp'", specifier = ">=3.9,<4" },
     { name = "cryptography", specifier = ">=46.0.5" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", extras = ["cryptography"], specifier = ">=2.8.0" },
-    { name = "requests", marker = "extra == 'requests'", specifier = ">=2.31" },
+    { name = "requests", marker = "extra == 'requests'", specifier = ">=2.31,<3" },
     { name = "wrapt", marker = "extra == 'instrumentation'", specifier = ">=1.16,<3" },
 ]
 provides-extras = ["requests", "aiohttp", "instrumentation"]
