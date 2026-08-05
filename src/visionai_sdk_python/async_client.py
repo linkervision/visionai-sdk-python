@@ -1,7 +1,7 @@
 import httpx
 
 from ._base import _BaseClient
-from ._source_header import source_headers
+from ._request_attribution import merge_request_attribution
 from .auth.async_resource import AsyncAuthResource
 from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
 from .vlm.async_resource import AsyncVLMResource
@@ -28,7 +28,6 @@ class AsyncClient(_BaseClient):
             max_keepalive_connections=max_keepalive_connections,
         )
         self._client = httpx.AsyncClient(
-            headers=source_headers(),
             verify=self.verify_ssl,
             timeout=self.timeout,
             limits=httpx.Limits(
@@ -42,6 +41,7 @@ class AsyncClient(_BaseClient):
 
     async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """Execute an async HTTP request, mapping httpx exceptions to SDK exceptions."""
+        merge_request_attribution(kwargs)
         try:
             response = await self._client.request(method, url, **kwargs)
         except httpx.TimeoutException as e:

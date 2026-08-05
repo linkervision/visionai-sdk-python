@@ -1050,12 +1050,14 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyjwt" },
-    { name = "wrapt" },
 ]
 
 [package.optional-dependencies]
 aiohttp = [
     { name = "aiohttp" },
+]
+instrumentation = [
+    { name = "wrapt" },
 ]
 requests = [
     { name = "requests" },
@@ -1068,6 +1070,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "requests" },
     { name = "ruff" },
+    { name = "wrapt" },
 ]
 
 [package.metadata]
@@ -1078,9 +1081,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", extras = ["cryptography"], specifier = ">=2.8.0" },
     { name = "requests", marker = "extra == 'requests'", specifier = ">=2.31" },
-    { name = "wrapt", specifier = ">=1.16,<3" },
+    { name = "wrapt", marker = "extra == 'instrumentation'", specifier = ">=1.16,<3" },
 ]
-provides-extras = ["requests", "aiohttp"]
+provides-extras = ["requests", "aiohttp", "instrumentation"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1089,6 +1092,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.25.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "ruff", specifier = ">=0.15.11" },
+    { name = "wrapt", specifier = ">=1.16,<3" },
 ]
 
 [[package]]

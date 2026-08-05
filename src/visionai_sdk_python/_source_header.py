@@ -18,6 +18,11 @@ from typing import Any
 SOURCE_ENV_VAR = "VISIONAI_SERVICE_SOURCE"
 SOURCE_HEADER = "X-Request-Source"
 
+# Shared "did *we* set this header" marker, read by instrumentation.py's
+# per-request httpx scoping and set here so client.py/async_client.py can
+# participate without importing instrumentation.py (which pulls in wrapt).
+INJECTED_EXTENSION_KEY = "visionai_sdk_python.source_header_injected"
+
 # Printable ASCII with no leading/trailing space. Stricter than any single
 # library's own check, so a value that passes here is safe to hand to requests,
 # httpx and aiohttp alike.
@@ -60,18 +65,26 @@ _current_origin: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
+def _decode(value: str | bytes) -> str:
+    # HTTP header bytes are ISO-8859-1 per RFC 7230 (and the ASGI spec spells
+    # this out explicitly for scope["headers"]) -- latin-1 decodes any byte
+    # sequence without raising, unlike utf-8.
+    return value.decode("latin-1") if isinstance(value, bytes) else value
+
+
 def origin_from_headers(headers: Any) -> str | None:
     """Read an inbound X-Request-Source value, case-insensitively.
 
     ``headers`` may be a mapping (dict, CIMultiDict, a framework's own headers
-    object exposing ``.items()``) or an iterable of ``(key, value)`` pairs.
+    object exposing ``.items()``) or an iterable of ``(key, value)`` pairs --
+    including raw ``bytes`` keys/values, as in ASGI's ``scope["headers"]``.
     Returns None if absent — meaning the caller of the current request did not
     already attribute it, so this service is the origin of whatever follows.
     """
     pairs = list(headers.items()) if hasattr(headers, "items") else list(headers or [])
     for key, value in pairs:
-        if key.lower() == SOURCE_HEADER.lower():
-            return value
+        if _decode(key).lower() == SOURCE_HEADER.lower():
+            return _decode(value)
     return None
 
 

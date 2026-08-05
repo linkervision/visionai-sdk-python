@@ -234,6 +234,21 @@ class TestNoOpByDefault:
         finally:
             instrumentation.uninstrument()
 
+    def test_a_later_bare_call_does_not_reset_the_allowlist(self, url, monkeypatch):
+        """Regression: allowed_destination_hosts used to be unconditionally
+        reset to the default on every call, so a second, unrelated instrument()
+        call with no arguments (e.g. from another init path, a library, a test
+        fixture) silently wiped out a custom allowlist with no warning."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        try:
+            assert requests.Session().get(url).text == "stream-agent"
+
+            instrumentation.instrument()  # no args -- must be a no-op for scoping
+            assert requests.Session().get(url).text == "stream-agent"
+        finally:
+            instrumentation.uninstrument()
+
 
 class TestMalformedEnvVar:
     """A bad env var must not be able to break the caller's traffic."""
@@ -256,6 +271,33 @@ class TestMalformedEnvVar:
                 assert requests.Session().get(url).text == MISSING
         finally:
             instrumentation.uninstrument()
+
+
+class TestMissingPatchTargetWarnsInsteadOfSilentlyDoingNothing:
+    """Regression: instrument() caught ImportError and AttributeError alike.
+    ImportError (library not installed) is an expected skip, but AttributeError
+    means a patch target we assumed exists on a private upstream API is gone
+    (e.g. a minor version renamed/removed it) -- that used to fail exactly the
+    same way, silently, with no signal that attribution had quietly stopped
+    working for that library."""
+
+    def test_missing_target_warns_but_other_targets_still_get_patched(
+        self, url, monkeypatch
+    ):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        original = httpx.Client._send_single_request
+        del httpx.Client._send_single_request
+        try:
+            with pytest.warns(
+                RuntimeWarning, match="httpx.Client._send_single_request"
+            ):
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+
+            # requests wasn't affected by httpx's missing target -- still patched.
+            assert requests.Session().get(url).text == "stream-agent"
+        finally:
+            instrumentation.uninstrument()
+            httpx.Client._send_single_request = original
 
 
 class TestDestinationScoping:
@@ -411,7 +453,35 @@ class TestRedirectReChecksDestinationPerHop:
         assert response.text == "stream-agent"
 
 
-class TestAppliesToPreexistingClients:
+class TestRequestsNestedCallDoesNotLeakDispatchState:
+    """Regression: a response hook fires from inside Session.send() -- still on
+    the same call stack, before the outer send() returns -- and can make its
+    own, wholly independent request. That nested request used to incorrectly
+    inherit the outer chain's "we_injected" state (both share the same
+    contextvar-held dict), which could strip a caller-supplied header on the
+    nested request that had nothing to do with the outer one. State is now
+    keyed by id(request.hooks), which PreparedRequest.copy() carries by
+    reference across a real redirect chain but which a fresh, unrelated
+    request never shares.
+    """
+
+    def test_hook_triggered_request_keeps_its_own_explicit_header(
+        self, url, url_localhost, instrumented
+    ):
+        nested_result = {}
+
+        def hook(response, *args, **kwargs):
+            nested_result["text"] = requests.get(
+                url_localhost, headers={"X-Request-Source": "audit-tool"}
+            ).text
+
+        response = requests.Session().get(url, hooks={"response": [hook]})
+
+        assert response.text == "stream-agent"  # outer: our own injection
+        assert (
+            nested_result["text"] == "audit-tool"
+        )  # inner: caller's own value, untouched
+
     """Injection now patches a request-dispatch method looked up on the class at
     call time (Session.send / Client._send_single_request /
     ClientRequest.__init__), not __init__. Unlike the old construction-time
@@ -462,40 +532,87 @@ class TestAppliesToPreexistingClients:
 
 
 class TestSdkClientCarriesHeaderNatively:
-    """The SDK's own clients must attribute themselves without instrument()."""
+    """The SDK's own clients must attribute themselves without instrument().
 
-    def test_sync_client_sets_default_header(self, monkeypatch):
-        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        from visionai_sdk_python import Client
+    Injection happens per-request (in ``_request``, via
+    ``merge_request_attribution``), not once at client construction -- a
+    static construction-time default header looked, to instrument()'s
+    per-request scoping, indistinguishable from a caller-supplied value,
+    which silently defeated both destination scoping and origin forwarding
+    for the SDK's own clients whenever instrument() was also active. See
+    ``test_cooperates_with_instrument_destination_scoping`` below.
+    """
 
-        client = Client(auth_url="http://a.test", vlm_url="http://v.test")
-
-        assert client._client.headers[SOURCE_HEADER] == "stream-agent"
-
-    def test_async_client_sets_default_header(self, monkeypatch):
-        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
-        from visionai_sdk_python import AsyncClient
-
-        client = AsyncClient(auth_url="http://a.test", vlm_url="http://v.test")
-
-        assert client._client.headers[SOURCE_HEADER] == "stream-agent"
-
-    def test_no_header_when_env_unset(self, monkeypatch):
-        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
-        from visionai_sdk_python import Client
-
-        client = Client(auth_url="http://a.test", vlm_url="http://v.test")
-
-        assert SOURCE_HEADER not in client._client.headers
-
-    def test_end_to_end_without_instrument(self, url, monkeypatch):
-        """The header must reach the wire, not just sit on the client object."""
+    def test_sync_client_carries_header(self, url, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
         from visionai_sdk_python import Client
 
         client = Client(auth_url=url, vlm_url=url)
 
         assert client._request("GET", url).text == "stream-agent"
+
+    async def test_async_client_carries_header(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import AsyncClient
+
+        client = AsyncClient(auth_url=url, vlm_url=url)
+
+        assert (await client._request("GET", url)).text == "stream-agent"
+
+    def test_no_header_when_env_unset(self, url, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url=url, vlm_url=url)
+
+        assert client._request("GET", url).text == MISSING
+
+    def test_caller_supplied_header_is_never_overridden(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url=url, vlm_url=url)
+        response = client._request(
+            "GET", url, headers={"X-Request-Source": "caller-value"}
+        )
+
+        assert response.text == "caller-value"
+
+    def test_built_before_scope_still_picks_up_a_later_current_origin(
+        self, url, monkeypatch
+    ):
+        """Regression: construction-time injection meant a client built before
+        entering a current_origin() scope never saw it. Per-request merging
+        re-reads the origin on every call instead."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url=url, vlm_url=url)  # built outside any scope
+
+        with instrumentation.current_origin("observ-pod-1"):
+            assert client._request("GET", url).text == "observ-pod-1"
+
+    def test_cooperates_with_instrument_destination_scoping(
+        self, url, url_localhost, monkeypatch
+    ):
+        """Regression: a static default header was indistinguishable from a
+        caller-supplied one, so instrument()'s per-request scoping treated it
+        as "not ours" and left it alone unconditionally -- sending it to any
+        destination the client talked to, allowlisted or not. Tagging the
+        injection via the same INJECTED_EXTENSION_KEY marker instrument() uses
+        makes the client's own header subject to the same scoping."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        try:
+            from visionai_sdk_python import Client
+
+            allowed_client = Client(auth_url=url, vlm_url=url)
+            assert allowed_client._request("GET", url).text == "stream-agent"
+
+            disallowed_client = Client(auth_url=url_localhost, vlm_url=url_localhost)
+            assert disallowed_client._request("GET", url_localhost).text == MISSING
+        finally:
+            instrumentation.uninstrument()
 
 
 class TestOriginFromHeaders:
@@ -516,6 +633,33 @@ class TestOriginFromHeaders:
         )
         assert instrumentation.origin_from_headers({}) is None
         assert instrumentation.origin_from_headers(None) is None
+
+    def test_extracts_from_raw_asgi_byte_pairs(self):
+        """Regression: scope["headers"] (ASGI's raw wire-level representation,
+        used by middleware that doesn't go through a framework's already-decoded
+        headers object) is list[tuple[bytes, bytes]] -- bytes never compares
+        equal to the str SOURCE_HEADER regardless of content, which silently
+        dropped the inherited origin instead of erroring."""
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"x-request-source", b"observ-pod-1"),
+        ]
+
+        result = instrumentation.origin_from_headers(headers)
+
+        assert result == "observ-pod-1"
+        assert isinstance(result, str)  # not bytes -- current_origin() requires str
+
+    def test_returned_value_feeds_current_origin_without_crashing(self):
+        """The value from origin_from_headers() must be usable directly as
+        current_origin()'s argument -- decoding only the key for comparison and
+        forgetting the value would trade the silent-drop bug for a TypeError
+        here, since _validate() matches against a str-only regex."""
+        headers = [(b"x-request-source", b"observ-pod-1")]
+
+        origin = instrumentation.origin_from_headers(headers)
+        with instrumentation.current_origin(origin):
+            assert instrumentation.get_current_origin() == "observ-pod-1"
 
 
 class TestCurrentOriginScope:
@@ -567,11 +711,16 @@ class TestCurrentOriginScope:
                 assert await response.text() == "observ-pod-1"
 
     def test_sdk_client_inherits_the_origin(self, url, instrumented):
+        """Client built before the scope, matching real startup-then-reuse
+        usage -- building it inside the scope would only exercise "construction
+        happened to run while the scope was active," not real per-request
+        inheritance (see TestSdkClientCarriesHeaderNatively for that
+        regression covered directly)."""
         from visionai_sdk_python import Client
 
-        with instrumentation.current_origin("observ-pod-1"):
-            client = Client(auth_url=url, vlm_url=url)
+        client = Client(auth_url=url, vlm_url=url)
 
+        with instrumentation.current_origin("observ-pod-1"):
             assert client._request("GET", url).text == "observ-pod-1"
 
     async def test_concurrent_tasks_do_not_leak_origin_into_each_other(

@@ -12,9 +12,10 @@ since injection patches a request-dispatch method on the class rather than
 ``__init__``.
 
 **Destination scoping.** Only hosts matching ``allowed_destination_hosts``
-(default ``*-backend.svc.cluster.local``) get the header; everything else
-(Stripe, an external webhook, ...) is untouched. Fail-closed, no "all
-destinations" mode -- opt in explicitly::
+(default covers ``vlm-inference-server``, ``vlm-scheduling-service``, and
+``*.svc.cluster.local``) get the header; everything else (Stripe, an external
+webhook, ...) is untouched. Fail-closed, no "all destinations" mode -- opt in
+explicitly::
 
     instrumentation.instrument(
         allowed_destination_hosts=["vlm-inference-server", "*.svc.cluster.local"],
@@ -44,12 +45,20 @@ service-source-attribution plan.
 
 import contextvars
 import fnmatch
+import warnings
 from typing import Any
 from urllib.parse import urlsplit
 
-import wrapt
+try:
+    import wrapt
+except ImportError as e:
+    raise ImportError(
+        "visionai_sdk_python.instrumentation requires the 'wrapt' package. "
+        "Install it with: pip install visionai-sdk-python[instrumentation]"
+    ) from e
 
 from ._source_header import (
+    INJECTED_EXTENSION_KEY,
     SOURCE_HEADER,
     _effective_source,
     current_origin,
@@ -73,7 +82,17 @@ _instrumented = False
 # the header injected on its own cluster-internal backends. There is
 # deliberately no "match everything" mode -- a service that needs a different
 # set names it explicitly via allowed_destination_hosts.
-_DEFAULT_ALLOWED_DESTINATION_HOSTS: tuple[str, ...] = ("*-backend.svc.cluster.local",)
+#
+# Named explicitly rather than relying on a single glob: "*-backend.svc.cluster.local"
+# alone doesn't match the actual current VLM targets (vlm-inference-server,
+# vlm-scheduling-service), which would make the out-of-the-box default silently
+# inject nothing for the primary use case, with no signal that it didn't.
+_DEFAULT_ALLOWED_DESTINATION_HOSTS: tuple[str, ...] = (
+    "vlm-inference-server",
+    "vlm-scheduling-service",
+    "*-backend.svc.cluster.local",
+    "*.svc.cluster.local",
+)
 
 _allowed_destination_hosts: tuple[str, ...] = _DEFAULT_ALLOWED_DESTINATION_HOSTS
 
@@ -119,9 +138,11 @@ def _find_pair(pairs: list[tuple[str, str]]) -> str | None:
 # which is why the tracking mechanism below differs per library; the policy
 # itself (never touch a caller's value; add when allowed and absent; remove
 # our own value when the destination is no longer allowed) is the same one
-# in all three.
+# in all three. Client/AsyncClient set the same INJECTED_EXTENSION_KEY marker
+# (see client.py) so their own native header injection cooperates correctly
+# with this scoping/origin-forwarding logic when instrument() is also active.
 
-_EXTENSION_KEY = "visionai_sdk_python.source_header_injected"
+_EXTENSION_KEY = INJECTED_EXTENSION_KEY
 
 
 def _inject_aiohttp_request(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
@@ -155,7 +176,7 @@ def _inject_aiohttp_request(wrapped: Any, instance: Any, args: Any, kwargs: Any)
     return wrapped(*args, **kwargs)
 
 
-_requests_dispatch_state: contextvars.ContextVar[dict[str, bool] | None] = (
+_requests_dispatch_state: contextvars.ContextVar[dict[int, dict[str, bool]] | None] = (
     contextvars.ContextVar("visionai_requests_dispatch_state", default=None)
 )
 
@@ -164,21 +185,27 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
     """``requests.Session.send`` -- called for the initial dispatch and, via
     ``resolve_redirects``, recursively again for every redirect hop, nested
     inside this same (not-yet-returned) call. ``PreparedRequest.copy()`` carries
-    a hop's headers into the next one, so a dict threaded through a contextvar
-    across that recursion remembers whether *we* set the header on an earlier
-    hop of this chain: only the outermost call creates it and only the
-    outermost call's ``finally`` tears it down, so every nested hop sees the
-    same dict.
+    a hop's headers *and* its ``hooks`` object (by reference, not copied) into
+    the next one, so ``id(request.hooks)`` is stable across every hop of one
+    redirect chain and distinct for any unrelated nested ``send()`` -- e.g. a
+    response hook that fires (still inside this call) and makes its own,
+    independent request. Keying state by that id, inside a per-context dict,
+    means a hook's own call gets fresh state instead of incorrectly inheriting
+    "we_injected" from the chain it happened to fire during.
     """
     request = args[0] if args else kwargs.get("request")
     if request is None:
         return wrapped(*args, **kwargs)
 
-    state = _requests_dispatch_state.get()
+    states = _requests_dispatch_state.get()
     token = None
-    if state is None:
-        state = {"we_injected": False}
-        token = _requests_dispatch_state.set(state)
+    if states is None:
+        states = {}
+        token = _requests_dispatch_state.set(states)
+
+    chain_key = id(request.hooks)
+    is_new_chain = chain_key not in states
+    state = states.setdefault(chain_key, {"we_injected": False})
 
     try:
         source = _effective_source()
@@ -195,6 +222,8 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
 
         return wrapped(*args, **kwargs)
     finally:
+        if is_new_chain:
+            states.pop(chain_key, None)
         if token is not None:
             _requests_dispatch_state.reset(token)
 
@@ -257,24 +286,27 @@ _TARGETS = (
 def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
     """Wrap the installed HTTP clients' request-dispatch methods. Safe to call
     more than once: the wrapping itself only happens the first time (calling it
-    again would double-wrap the same methods), but ``allowed_destination_hosts``
-    is applied every time, so a later call can still update it.
+    again would double-wrap the same methods). Omitting
+    ``allowed_destination_hosts`` on a later call leaves whatever is already
+    configured untouched (a no-op for scoping) -- only passing an explicit
+    list updates it; there is no way to omit the argument and mean "reset to
+    the default", since that can't be distinguished from "I have nothing new
+    to say about this."
 
     ``allowed_destination_hosts`` gates which destinations receive
     ``X-Request-Source``; hostnames are matched via ``fnmatch`` glob patterns
     against the parsed URL host (case-insensitive), so ``*.svc.cluster.local``
     or ``*-backend.svc.cluster.local`` work as expected. Defaults to
-    :data:`_DEFAULT_ALLOWED_DESTINATION_HOSTS` when omitted -- there is no
-    "match everything" option; a service that needs a broader or different set
-    must name it explicitly.
+    :data:`_DEFAULT_ALLOWED_DESTINATION_HOSTS` on the first call when omitted
+    -- there is no "match everything" option; a service that needs a broader
+    or different set must name it explicitly.
     """
     global _instrumented, _allowed_destination_hosts
 
-    _allowed_destination_hosts = (
-        tuple(allowed_destination_hosts)
-        if allowed_destination_hosts is not None
-        else _DEFAULT_ALLOWED_DESTINATION_HOSTS
-    )
+    if allowed_destination_hosts is not None:
+        _allowed_destination_hosts = tuple(allowed_destination_hosts)
+    elif not _instrumented:
+        _allowed_destination_hosts = _DEFAULT_ALLOWED_DESTINATION_HOSTS
 
     if _instrumented:
         return
@@ -282,7 +314,17 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
     for module, target, wrapper in _TARGETS:
         try:
             wrapt.wrap_function_wrapper(module, target, wrapper)
-        except (ImportError, AttributeError):
+        except ImportError:
+            continue  # module not installed -- expected, it's an optional extra
+        except AttributeError:
+            warnings.warn(
+                f"visionai_sdk_python: could not patch {module}.{target} for "
+                f"{SOURCE_HEADER} attribution -- the target may have moved or "
+                "been renamed upstream. Outbound calls through this library "
+                "will not carry the header.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             continue
 
     _instrumented = True

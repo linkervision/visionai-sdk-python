@@ -12,12 +12,12 @@ dependencies = [
     "pydantic>=2.12.5",
     "cryptography>=46.0.5",
     "PyJWT[cryptography]>=2.8.0",
-    "wrapt>=1.16,<3",
 ]
 
 [project.optional-dependencies]
 requests = ["requests>=2.31"]
 aiohttp = ["aiohttp>=3.9"]
+instrumentation = ["wrapt>=1.16,<3"]
 
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm>=8"]
@@ -38,6 +38,7 @@ dev = [
     "ruff>=0.15.11",
     "requests>=2.31",
     "aiohttp>=3.9",
+    "wrapt>=1.16,<3",
 ]
 
 [tool.pytest.ini_options]

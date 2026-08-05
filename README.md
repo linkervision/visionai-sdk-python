@@ -19,14 +19,15 @@ Python client library for VisionAI authentication and Vision Language Model (VLM
 pip install visionai-sdk-python
 ```
 
-Attributing direct `requests`/`aiohttp` calls (see [Service Source Attribution](#service-source-attribution) below) needs the underlying library installed via optional extras:
+Attributing direct `requests`/`aiohttp` calls, or using `instrumentation.instrument()` at all (see [Service Source Attribution](#service-source-attribution) below), needs optional extras:
 
 ```bash
 pip install visionai-sdk-python[requests]
 pip install visionai-sdk-python[aiohttp]
+pip install visionai-sdk-python[instrumentation]   # needed for instrument() itself
 ```
 
-`httpx` is already a core dependency, so it needs no extra.
+`httpx` is already a core dependency, so it needs no extra. `Client`/`AsyncClient` attribute themselves without any of the above.
 
 ## Quick Start
 
@@ -269,15 +270,15 @@ here's the checklist:
    ```
 
 3. **Don't assume the default covers you.** Omitting
-   `allowed_destination_hosts` falls back to the SDK's hardcoded
-   `*-backend.svc.cluster.local` — that only matches if your target's
-   Kubernetes `Service` name literally ends in `-backend`. Most callers need to
-   pass their own list explicitly; if you skip this step, `instrument()` still
-   runs without error, but `X-Request-Source` silently never goes out anywhere,
-   which looks identical to "it's not working" with no error to point at. Use
-   whatever hostname your service already calls (a short in-cluster service
-   name like `vlm-inference-server`, or a wildcard like `*.svc.cluster.local`
-   if you call several).
+   `allowed_destination_hosts` falls back to the SDK's built-in default —
+   `vlm-inference-server`, `vlm-scheduling-service`, and any host matching
+   `*-backend.svc.cluster.local` or `*.svc.cluster.local`. If your service
+   calls something else (a different internal service, a non-standard
+   hostname), that default won't match: `instrument()` still runs without
+   error, but `X-Request-Source` silently never goes out anywhere for that
+   destination, which looks identical to "it's not working" with no error to
+   point at. Pass your own list explicitly whenever you're not sure the
+   default covers every host you call.
 4. If in doubt about what your service actually calls, check the host in the
    URLs you pass to `requests`/`httpx`/`aiohttp` today — that's exactly what
    `allowed_destination_hosts` needs to match.
@@ -308,10 +309,11 @@ by third-party packages you cannot edit, module-level one-shots like
 `requests.get()`, and requests sent through a client instance that already
 existed before `instrument()` ran (see "Call it any time" below).
 
-The underlying libraries are optional extras, and whichever is not installed is
-skipped:
+`instrument()` itself needs the `instrumentation` extra (`wrapt`). The libraries
+it patches are separately optional, and whichever is not installed is skipped:
 
 ```bash
+pip install visionai-sdk-python[instrumentation]
 pip install visionai-sdk-python[requests]   # httpx is already a core dependency
 pip install visionai-sdk-python[aiohttp]
 ```
@@ -328,8 +330,9 @@ insensitive, `fnmatch`-style globs, e.g. `*.svc.cluster.local`), never against
 the raw URL string, so a host can't be spoofed via path or query string.
 
 If `allowed_destination_hosts` is omitted, it defaults to
-`*-backend.svc.cluster.local`. Pass your own list to use a different or
-additional set of hosts.
+`vlm-inference-server`, `vlm-scheduling-service`, `*-backend.svc.cluster.local`,
+and `*.svc.cluster.local`. Pass your own list to use a different or additional
+set of hosts.
 
 The check re-runs on every hop, including redirects: a request to an
 allowlisted host that gets redirected somewhere else stops carrying the header
