@@ -629,6 +629,38 @@ class TestRedirectReChecksDestinationPerHop:
         response = requests.Session().get(_redirect(url, url_localhost))
         assert response.text == MISSING
 
+    def test_requests_third_hop_does_not_leak_the_header(
+        self, url, url_localhost, instrumented
+    ):
+        """Regression: resolve_redirects() keeps its own req/prepared_request
+        chain across the redirect loop, built via its own req.copy() calls --
+        entirely independent of whatever object our wrapper hands to
+        wrapped(). A .copy()-based strip on hop 2 (as used for hop 1, to
+        avoid mutating a caller-owned object) is invisible to that chain, so
+        hop 3's request was still built from hop 1's original, un-stripped
+        header regardless of what hop 2 decided -- allowlist=["127.0.0.1"],
+        hop 1 127.0.0.1 (stamped) -> hop 2 localhost (stripped, on the wire)
+        -> hop 3 localhost, which leaked the header back."""
+        chain = _redirect(url, _redirect(url_localhost, url_localhost))
+        response = requests.Session().get(chain)
+        assert response.text == MISSING
+
+    def test_requests_third_hop_keeps_a_header_injected_on_hop_two(
+        self, url, url_localhost, instrumented
+    ):
+        """The mirror case: injection (not just stripping) on an internal
+        hop must also propagate forward to the next one."""
+        chain = _redirect(url_localhost, _redirect(url, url))
+        response = requests.Session().get(chain)
+        assert response.text == "stream-agent"
+
+    def test_requests_third_hop_strips_a_header_after_an_allowed_middle_hop(
+        self, url, url_localhost, instrumented
+    ):
+        chain = _redirect(url_localhost, _redirect(url, url_localhost))
+        response = requests.Session().get(chain)
+        assert response.text == MISSING
+
     def test_httpx_allowed_to_disallowed_strips_the_header(
         self, url, url_localhost, instrumented
     ):
@@ -641,6 +673,18 @@ class TestRedirectReChecksDestinationPerHop:
             response = client.get(_redirect(url, url))
         assert response.text == "stream-agent"
 
+    def test_httpx_third_hop_does_not_leak_the_header(
+        self, url, url_localhost, instrumented
+    ):
+        """httpx doesn't share requests' bug: _build_redirect_request derives
+        each hop's headers from the current (already-mutated-by-us) request,
+        not from an independent copy chain, so this already passed before
+        the requests-specific fix above -- kept as regression coverage."""
+        chain = _redirect(url, _redirect(url_localhost, url_localhost))
+        with httpx.Client(follow_redirects=True) as client:
+            response = client.get(chain)
+        assert response.text == MISSING
+
     async def test_aiohttp_allowed_to_disallowed_strips_the_header(
         self, url, url_localhost, instrumented
     ):
@@ -652,6 +696,18 @@ class TestRedirectReChecksDestinationPerHop:
         async with aiohttp.ClientSession() as session:
             response = await session.get(_redirect(url, url))
             assert await response.text() == "stream-agent"
+
+    async def test_aiohttp_third_hop_does_not_leak_the_header(
+        self, url, url_localhost, instrumented
+    ):
+        """aiohttp rebuilds every hop fresh from the caller's original
+        headers (see _inject_aiohttp_request's docstring) rather than
+        chaining from a previous hop, so it never had requests' bug either
+        -- kept as regression coverage."""
+        chain = _redirect(url, _redirect(url_localhost, url_localhost))
+        async with aiohttp.ClientSession() as session:
+            response = await session.get(chain)
+            assert await response.text() == MISSING
 
     def test_escape_hatch_value_survives_a_redirect_to_a_disallowed_host(
         self, url, url_localhost, instrumented

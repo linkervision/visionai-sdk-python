@@ -271,12 +271,24 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
     means a hook's own call gets fresh state instead of incorrectly inheriting
     "we_injected" from the chain it happened to fire during.
 
-    Only ever mutates a ``.copy()`` of the caller's request, never the object
-    they passed in -- mutating it directly left an observable side effect on
-    the caller's own ``PreparedRequest``, and one that outlives a single
-    ``send()``: reusing that same object for a later, unrelated call (mutate
-    ``.url``, call ``send()`` again) would see our earlier value as "already
-    there", indistinguishable from something the caller set themselves.
+    Only mutates a ``.copy()`` of the *first* hop's request, never the object
+    the caller passed in directly -- mutating it in place left an observable
+    side effect on the caller's own ``PreparedRequest``, and one that outlives
+    a single ``send()``: reusing that same object for a later, unrelated call
+    (mutate ``.url``, call ``send()`` again) would see our earlier value as
+    "already there", indistinguishable from something the caller set
+    themselves.
+
+    Every later hop's request, though, is one ``resolve_redirects()`` built
+    itself (via its own ``req.copy()``) and will never be seen by any other
+    code -- and critically, mutating *that* copy is the only way our decision
+    is visible to ``resolve_redirects()``'s own chaining. It keeps its own
+    ``req`` variable across iterations of its redirect loop and copies from
+    *that* to build each next hop, entirely independent of whatever object we
+    hand to ``wrapped()``; a ``.copy()`` here, like the first hop's, would only
+    ever affect what that one hop actually sends over the wire, invisible to
+    ``resolve_redirects()`` -- so hop 3's request would still be built from
+    hop 1's original header, un-stripped, regardless of what hop 2 decided.
     """
     request = args[0] if args else kwargs.get("request")
     if request is None:
@@ -300,14 +312,22 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
         else:
             matched = _destination_allowed(request.url)
             source = _effective_source()
-            if source and matched:
-                request = request.copy()
-                request.headers[SOURCE_HEADER] = source
-                state["we_injected"] = True
-            elif existing is not None:
-                request = request.copy()
-                del request.headers[SOURCE_HEADER]
-                state["we_injected"] = False
+            if is_new_chain:
+                if source and matched:
+                    request = request.copy()
+                    request.headers[SOURCE_HEADER] = source
+                    state["we_injected"] = True
+                elif existing is not None:
+                    request = request.copy()
+                    del request.headers[SOURCE_HEADER]
+                    state["we_injected"] = False
+            else:
+                if source and matched:
+                    request.headers[SOURCE_HEADER] = source
+                    state["we_injected"] = True
+                elif existing is not None:
+                    del request.headers[SOURCE_HEADER]
+                    state["we_injected"] = False
 
         if args:
             args = (request, *args[1:])
