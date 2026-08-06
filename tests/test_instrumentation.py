@@ -10,6 +10,7 @@ import http.server
 import socketserver
 import sys
 import threading
+import time
 import urllib.parse
 import warnings
 
@@ -486,6 +487,54 @@ class TestLifetimeNeverMatchedWarning:
             requests.Session().get(url)  # dispatched, but doesn't match
             with pytest.warns(RuntimeWarning, match="never matched"):
                 instrumentation._warn_if_never_matched()
+        finally:
+            instrumentation.uninstrument()
+
+    def test_early_warning_fires_on_the_next_dispatch_once_the_threshold_elapses(
+        self, url, monkeypatch
+    ):
+        """Regression: atexit does not run on a bare SIGTERM (the usual
+        container shutdown signal), so a killed container never saw this
+        warning at all. Once _EARLY_WARN_SECONDS has passed since
+        instrument() with still no match, the very next unmatched dispatch
+        warns immediately -- no atexit, no process exit required."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            monkeypatch.setattr(
+                instrumentation, "_instrumented_at", time.monotonic() - 31
+            )
+            with pytest.warns(RuntimeWarning, match="never matched"):
+                requests.Session().get(url)  # dispatched, doesn't match
+        finally:
+            instrumentation.uninstrument()
+
+    def test_no_early_warning_before_the_threshold_elapses(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                requests.Session().get(url)  # dispatched, doesn't match, too soon
+        finally:
+            instrumentation.uninstrument()
+
+    def test_early_warning_does_not_fire_twice_at_shutdown(self, url, monkeypatch):
+        """The early check and the atexit-registered check share the same
+        _warn_if_never_matched(), guarded so the same misconfiguration isn't
+        reported twice."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            monkeypatch.setattr(
+                instrumentation, "_instrumented_at", time.monotonic() - 31
+            )
+            with pytest.warns(RuntimeWarning, match="never matched"):
+                requests.Session().get(url)  # early warning fires here
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                instrumentation._warn_if_never_matched()  # shutdown: must not repeat
         finally:
             instrumentation.uninstrument()
 

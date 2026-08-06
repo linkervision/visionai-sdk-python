@@ -24,10 +24,15 @@ process-lifetime warning below). Everything outside the list -- Stripe, an
 external webhook, ... -- is untouched.
 
 Re-checked on every hop, so a redirect leaving the allowlist stops carrying the
-header instead of leaking it onward. If, over the life of the process, no
-destination ever matched the allowlist, a ``RuntimeWarning`` fires at
-interpreter shutdown -- "attribution has no data" and "the allowlist is wrong"
-would otherwise look identical in production.
+header instead of leaking it onward. If ``allowed_destination_hosts`` never
+matches any destination, a ``RuntimeWarning`` fires -- as soon as it's been at
+least ``_EARLY_WARN_SECONDS`` since ``instrument()`` and another unmatched
+request is dispatched, or at interpreter shutdown if that never happens --
+"attribution has no data" and "the allowlist is wrong" would otherwise look
+identical in production. The early check exists because a bare ``SIGTERM``
+(the usual container shutdown signal) skips ``atexit`` hooks entirely, so
+relying on shutdown alone would mean a killed container never surfaces a
+misconfigured allowlist at all.
 
 **Forwarding an inherited origin (A-5).** By default this stamps the local
 service's own identity. If service B calls VLM on behalf of service A, B
@@ -51,6 +56,7 @@ service-source-attribution plan.
 import atexit
 import contextvars
 import fnmatch
+import time
 import warnings
 from typing import Any
 from urllib.parse import urlsplit
@@ -105,6 +111,15 @@ _allowed_destination_hosts: tuple[str, ...] = ()
 _ever_matched_destination = False
 _saw_any_dispatch = False
 _lifetime_check_registered = False
+_warned_never_matched = False
+
+# atexit doesn't run on a bare SIGTERM (the usual container shutdown signal),
+# so the warning also fires early -- from the next unmatched dispatch, not a
+# background timer -- once this much time has passed since instrument() with
+# still no match, instead of only ever being delivered at a shutdown that may
+# never reach atexit.
+_EARLY_WARN_SECONDS = 30.0
+_instrumented_at: float | None = None
 
 
 def _note_dispatch(matched: bool) -> None:
@@ -112,12 +127,25 @@ def _note_dispatch(matched: bool) -> None:
     _saw_any_dispatch = True
     if matched:
         _ever_matched_destination = True
+        return
+    if (
+        _instrumented_at is not None
+        and time.monotonic() - _instrumented_at >= _EARLY_WARN_SECONDS
+    ):
+        _warn_if_never_matched()
 
 
 def _warn_if_never_matched() -> None:
-    """Registered via atexit; also called directly by tests since atexit
-    hooks are unreliable to trigger and observe from within a test process."""
+    """Registered via atexit; also called early (see ``_note_dispatch``) and
+    directly by tests, since atexit hooks are unreliable to trigger and
+    observe from within a test process. ``_warned_never_matched`` guards
+    against firing twice for the same misconfiguration -- once early and then
+    again at shutdown."""
+    global _warned_never_matched
+    if _warned_never_matched:
+        return
     if _saw_any_dispatch and not _ever_matched_destination:
+        _warned_never_matched = True
         warnings.warn(
             f"visionai_sdk_python: instrument() was called and requests were "
             f"made, but allowed_destination_hosts {_allowed_destination_hosts!r} "
@@ -357,6 +385,7 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
             (an empty list, or one containing only blank strings).
     """
     global _instrumented, _allowed_destination_hosts, _lifetime_check_registered
+    global _instrumented_at
 
     if allowed_destination_hosts is not None:
         hosts = tuple(allowed_destination_hosts)
@@ -400,6 +429,7 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
         atexit.register(_warn_if_never_matched)
         _lifetime_check_registered = True
 
+    _instrumented_at = time.monotonic()
     _instrumented = True
 
 
@@ -407,6 +437,7 @@ def uninstrument() -> None:
     """Restore the original clients. Mainly for test isolation."""
     global _instrumented, _allowed_destination_hosts
     global _ever_matched_destination, _saw_any_dispatch
+    global _warned_never_matched, _instrumented_at
     if not _instrumented:
         return
 
@@ -431,3 +462,5 @@ def uninstrument() -> None:
     _allowed_destination_hosts = ()
     _ever_matched_destination = False
     _saw_any_dispatch = False
+    _warned_never_matched = False
+    _instrumented_at = None
