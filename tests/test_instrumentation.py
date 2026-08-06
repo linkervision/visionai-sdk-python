@@ -666,6 +666,30 @@ class TestSdkClientCarriesHeaderNatively:
         with instrumentation.current_origin("observ-pod-1"):
             assert client._request("GET", url).text == "observ-pod-1"
 
+    def test_caller_supplied_pairs_list_header_is_preserved(self, url, monkeypatch):
+        """Regression: merge_request_attribution() assumed headers was a
+        mapping and iterated it directly, so a caller passing a list of
+        (key, value) pairs -- valid httpx usage -- raised AttributeError on
+        ``key.lower()`` instead of being merged with."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url=url, vlm_url=url)
+        response = client._request(
+            "GET", url, headers=[("X-Request-Source", "caller-value")]
+        )
+
+        assert response.text == "caller-value"
+
+    def test_pairs_list_header_still_gets_the_header_injected(self, url, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        from visionai_sdk_python import Client
+
+        client = Client(auth_url=url, vlm_url=url)
+        response = client._request("GET", url, headers=[("X-Other", "value")])
+
+        assert response.text == "stream-agent"
+
     def test_cooperates_with_instrument_destination_scoping(
         self, url, url_localhost, monkeypatch
     ):

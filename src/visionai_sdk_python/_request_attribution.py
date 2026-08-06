@@ -15,7 +15,8 @@ from ._source_header import INJECTED_EXTENSION_KEY, SOURCE_HEADER, source_header
 def merge_request_attribution(kwargs: dict[str, Any]) -> None:
     """Mutate ``kwargs`` in place: add ``headers``/``extensions`` if not already set."""
     headers = kwargs.get("headers") or {}
-    already_set = any(key.lower() == SOURCE_HEADER.lower() for key in headers)
+    pairs = list(headers.items()) if hasattr(headers, "items") else list(headers)
+    already_set = any(key.lower() == SOURCE_HEADER.lower() for key, _ in pairs)
     if already_set:
         return
 
@@ -23,7 +24,7 @@ def merge_request_attribution(kwargs: dict[str, Any]) -> None:
     if not source:
         return
 
-    kwargs["headers"] = {**headers, **source}
+    kwargs["headers"] = {**dict(pairs), **source}
     kwargs["extensions"] = {
         **(kwargs.get("extensions") or {}),
         INJECTED_EXTENSION_KEY: True,
