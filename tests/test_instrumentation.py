@@ -315,6 +315,65 @@ class TestMalformedEnvVar:
             instrumentation.uninstrument()
 
 
+class TestStartupWarnsIfSourceEnvVarUnset:
+    """Regression: allowed_destination_hosts tracks whether a *destination*
+    matched, not whether a header was actually sent. A correct allowlist
+    paired with an unset VISIONAI_SERVICE_SOURCE (e.g. left out of Helm
+    values) means every call still reaches an allowed destination -- so
+    nothing ever looks unmatched to TestLifetimeNeverMatchedWarning's
+    tracking, even though no header goes out at all. instrument() checks
+    the env var directly instead of relying on that tracking to catch it."""
+
+    def test_warns_when_source_env_var_is_unset(self, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        try:
+            with pytest.warns(RuntimeWarning, match=SOURCE_ENV_VAR):
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        finally:
+            instrumentation.uninstrument()
+
+    def test_no_warning_when_source_env_var_is_set(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        finally:
+            instrumentation.uninstrument()
+
+    def test_no_unset_warning_for_a_set_but_malformed_value(self, monkeypatch):
+        """Regression: _source_value() returns None both when the env var is
+        truly absent and when it's set but fails validation, so checking
+        that return value directly would mislabel a malformed-but-present
+        value as "unset". The malformed case already gets its own warning
+        from _validate() -- this one must not also fire for it."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream\nagent")  # set, but invalid
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+            assert not any(SOURCE_ENV_VAR in str(w.message) for w in caught)
+        finally:
+            instrumentation.uninstrument()
+
+    def test_correct_allowlist_does_not_mask_the_missing_env_var(
+        self, url, monkeypatch
+    ):
+        """The exact repro from review: allowed_destination_hosts is
+        correct (it matches the real destination), so every dispatch
+        "matches" and TestLifetimeNeverMatchedWarning's tracking alone
+        would stay silent forever -- this warning is what actually
+        surfaces the missing env var."""
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        try:
+            with pytest.warns(RuntimeWarning, match=SOURCE_ENV_VAR):
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+            assert requests.Session().get(url).text == MISSING
+            assert instrumentation._ever_matched_destination is True
+        finally:
+            instrumentation.uninstrument()
+
+
 class TestMissingPatchTargetWarnsInsteadOfSilentlyDoingNothing:
     """Regression: instrument() caught ImportError and AttributeError alike.
     ImportError (library not installed) is an expected skip, but AttributeError

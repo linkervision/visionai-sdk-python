@@ -34,6 +34,13 @@ identical in production. The early check exists because a bare ``SIGTERM``
 relying on shutdown alone would mean a killed container never surfaces a
 misconfigured allowlist at all.
 
+This warning tracks whether a *destination* matched the allowlist, not
+whether a header was actually sent, so it can't catch a correct allowlist
+paired with an unset ``VISIONAI_SERVICE_SOURCE`` (e.g. left out of Helm
+values) -- every call still reaches an allowed destination, so nothing ever
+looks unmatched, even though no header goes out. ``instrument()`` checks for
+that directly and warns once, at call time, if the env var is unset.
+
 **Forwarding an inherited origin (A-5).** By default this stamps the local
 service's own identity. If service B calls VLM on behalf of service A, B
 should forward A's identity instead -- use ``current_origin()``/
@@ -56,6 +63,7 @@ service-source-attribution plan.
 import atexit
 import contextvars
 import fnmatch
+import os
 import time
 import warnings
 from typing import Any
@@ -71,6 +79,7 @@ except ImportError as e:
 
 from ._source_header import (
     INJECTED_EXTENSION_KEY,
+    SOURCE_ENV_VAR,
     SOURCE_HEADER,
     _effective_source,
     current_origin,
@@ -428,6 +437,25 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
     if not _lifetime_check_registered:
         atexit.register(_warn_if_never_matched)
         _lifetime_check_registered = True
+
+    if os.environ.get(SOURCE_ENV_VAR) is None:
+        # Checked against the raw env var, not _source_value() -- a value
+        # that's set but fails validation already gets its own warning (from
+        # _validate(), on every request), and reporting that case as "unset"
+        # here too would misdescribe it.
+        warnings.warn(
+            f"visionai_sdk_python: instrument() was called but {SOURCE_ENV_VAR} "
+            f"is unset -- outbound requests will carry no {SOURCE_HEADER} at "
+            "all (unless every call happens inside a current_origin() scope "
+            "that already has a value). A correct allowed_destination_hosts "
+            "won't surface this: destination matching, and therefore the "
+            "allowlist-never-matched warning, doesn't depend on whether a "
+            "header was actually injected. This is usually a missing "
+            "environment variable (e.g. left out of Helm values), not "
+            "intentional.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     _instrumented_at = time.monotonic()
     _instrumented = True
