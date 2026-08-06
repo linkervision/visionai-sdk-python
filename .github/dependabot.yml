@@ -9,7 +9,7 @@ updates:
       time: "02:00"
       timezone: Asia/Taipei
     cooldown:
-      default-days: 7
+      default-days: 3
       include:
         - httpx
         - requests
@@ -38,7 +38,7 @@ updates:
       time: "02:30"
       timezone: Asia/Taipei
     cooldown:
-      default-days: 7
+      default-days: 3
     groups:
       github-actions:
         patterns:
