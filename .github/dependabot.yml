@@ -10,16 +10,6 @@ updates:
       timezone: Asia/Taipei
     cooldown:
       default-days: 3
-      include:
-        - httpx
-        - requests
-        - aiohttp
-        - wrapt
-    allow:
-      - dependency-name: httpx
-      - dependency-name: requests
-      - dependency-name: aiohttp
-      - dependency-name: wrapt
     groups:
       instrumentation-http-clients:
         patterns:
