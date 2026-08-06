@@ -132,6 +132,14 @@ _instrumented_at: float | None = None
 
 
 def _note_dispatch(matched: bool) -> None:
+    # Trade-off, not a bug: a service running with PYTHONWARNINGS=error (or
+    # -W error) turns this into a RuntimeWarning raised straight at whichever
+    # request happens to be the first unmatched dispatch after
+    # _EARLY_WARN_SECONDS -- _warned_never_matched below is set before the
+    # warning fires, so only that one request pays for it, but which request
+    # that is isn't deterministic. Acceptable since warnings-as-errors is the
+    # caller's own choice, but worth remembering if this symptom is ever
+    # reported.
     global _ever_matched_destination, _saw_any_dispatch
     _saw_any_dispatch = True
     if matched:
