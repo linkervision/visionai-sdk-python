@@ -196,8 +196,9 @@ def _inject_aiohttp_request(wrapped: Any, instance: Any, args: Any, kwargs: Any)
 
     existing = _find_pair(pairs)
     if existing is None:
+        matched = _destination_allowed(url)
         source = _effective_source()
-        if source and _destination_allowed(url):
+        if source and matched:
             pairs.append((SOURCE_HEADER, source))
 
     # Always pass the materialized pairs onward. If `headers` was a one-shot
@@ -247,19 +248,21 @@ def _inject_requests_send(wrapped: Any, instance: Any, args: Any, kwargs: Any) -
     state = states.setdefault(chain_key, {"we_injected": False})
 
     try:
-        source = _effective_source()
         existing = request.headers.get(SOURCE_HEADER)
 
         if existing is not None and not state["we_injected"]:
             pass  # caller-supplied (this hop or an earlier one); never touched
-        elif source and _destination_allowed(request.url):
-            request = request.copy()
-            request.headers[SOURCE_HEADER] = source
-            state["we_injected"] = True
-        elif existing is not None:
-            request = request.copy()
-            del request.headers[SOURCE_HEADER]
-            state["we_injected"] = False
+        else:
+            matched = _destination_allowed(request.url)
+            source = _effective_source()
+            if source and matched:
+                request = request.copy()
+                request.headers[SOURCE_HEADER] = source
+                state["we_injected"] = True
+            elif existing is not None:
+                request = request.copy()
+                del request.headers[SOURCE_HEADER]
+                state["we_injected"] = False
 
         if args:
             args = (request, *args[1:])
@@ -283,14 +286,15 @@ def _apply_httpx_scoping(request: Any) -> None:
     nested like requests' recursive ``Session.send``), so a contextvar reset on
     return wouldn't survive between hops the way it does there.
     """
-    source = _effective_source()
     existing = request.headers.get(SOURCE_HEADER)
     we_injected = request.extensions.get(_EXTENSION_KEY, False)
 
     if existing is not None and not we_injected:
         return  # caller-supplied (this hop or an earlier one); never touched
 
-    if source and _destination_allowed(request.url):
+    matched = _destination_allowed(request.url)
+    source = _effective_source()
+    if source and matched:
         request.headers[SOURCE_HEADER] = source
         request.extensions[_EXTENSION_KEY] = True
     elif existing is not None:

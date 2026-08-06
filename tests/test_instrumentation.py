@@ -460,6 +460,21 @@ class TestLifetimeNeverMatchedWarning:
         finally:
             instrumentation.uninstrument()
 
+    def test_warns_even_without_source_env_var_configured(self, url, monkeypatch):
+        """Regression: _destination_allowed() (which feeds _note_dispatch())
+        was only called when _effective_source() was truthy, so with
+        VISIONAI_SERVICE_SOURCE unset -- itself a likely misconfiguration --
+        no dispatch was ever recorded and this warning could never fire,
+        leaving the allowlist-typo case silently indistinguishable from it."""
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        instrumentation.instrument(allowed_destination_hosts=["example.invalid"])
+        try:
+            requests.Session().get(url)  # dispatched, but doesn't match
+            with pytest.warns(RuntimeWarning, match="never matched"):
+                instrumentation._warn_if_never_matched()
+        finally:
+            instrumentation.uninstrument()
+
     def test_no_warning_once_something_matched(self, url, instrumented):
         requests.Session().get(
             url
