@@ -20,6 +20,7 @@ import pytest
 import requests
 
 from visionai_sdk_python import instrumentation
+from visionai_sdk_python._request_attribution import merge_request_attribution
 from visionai_sdk_python._source_header import SOURCE_ENV_VAR, SOURCE_HEADER
 
 MISSING = "MISSING"
@@ -740,6 +741,95 @@ class TestRequestsNestedCallDoesNotLeakDispatchState:
                 assert await response.text() == "stream-agent"
             finally:
                 instrumentation.uninstrument()
+
+
+class TestMergeRequestAttribution:
+    """Direct unit tests for merge_request_attribution() -- the single
+    injection point for all of the SDK's own Client/AsyncClient outbound
+    requests. Verified directly (not through a real HTTP round trip) since
+    what's being asserted -- exact duplicate pairs, a fully-drained one-shot
+    iterable -- would be obscured by httpx's own header handling."""
+
+    def test_duplicate_headers_are_preserved_on_injection(self, monkeypatch):
+        """Regression: kwargs["headers"] = {**dict(pairs), **source} routed
+        duplicate keys through dict(), collapsing them to one -- legal httpx
+        usage that must survive injection."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        kwargs = {"headers": [("X-Custom", "a"), ("X-Custom", "b")]}
+
+        merge_request_attribution(kwargs)
+
+        assert kwargs["headers"] == [
+            ("X-Custom", "a"),
+            ("X-Custom", "b"),
+            (SOURCE_HEADER, "stream-agent"),
+        ]
+
+    def test_duplicate_headers_are_preserved_when_caller_already_set_source(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        kwargs = {
+            "headers": [
+                ("X-Custom", "a"),
+                ("X-Custom", "b"),
+                (SOURCE_HEADER, "caller-value"),
+            ]
+        }
+
+        merge_request_attribution(kwargs)
+
+        assert kwargs["headers"] == [
+            ("X-Custom", "a"),
+            ("X-Custom", "b"),
+            (SOURCE_HEADER, "caller-value"),
+        ]
+
+    def test_one_shot_iterable_is_not_drained_when_caller_already_set_source(
+        self, monkeypatch
+    ):
+        """Regression: inspecting a one-shot iterable (e.g. a generator) to
+        check "already set" consumed it; an early return then left the
+        now-exhausted original object in kwargs["headers"] instead of the
+        materialized pairs, silently dropping the caller's own headers --
+        including their X-Request-Source -- once httpx iterated it."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        kwargs = {"headers": (kv for kv in [(SOURCE_HEADER, "caller-value")])}
+
+        merge_request_attribution(kwargs)
+
+        assert kwargs["headers"] == [(SOURCE_HEADER, "caller-value")]
+
+    def test_one_shot_iterable_is_not_drained_when_source_is_unset(self, monkeypatch):
+        monkeypatch.delenv(SOURCE_ENV_VAR, raising=False)
+        kwargs = {"headers": (kv for kv in [("X-Other", "value")])}
+
+        merge_request_attribution(kwargs)
+
+        assert kwargs["headers"] == [("X-Other", "value")]
+
+    def test_bytes_key_source_header_is_recognized_as_already_set(self, monkeypatch):
+        """Regression: key.lower() on a bytes key (httpx also accepts bytes
+        headers) never equals the str SOURCE_HEADER.lower(), so a caller's
+        bytes-keyed X-Request-Source wasn't recognized as already set and
+        got a second, duplicate value appended."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        kwargs = {"headers": {b"X-Request-Source": b"caller-bytes"}}
+
+        merge_request_attribution(kwargs)
+
+        assert kwargs["headers"] == [(b"X-Request-Source", b"caller-bytes")]
+
+    def test_mapping_headers_still_work(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
+        kwargs = {"headers": {"X-Other": "value"}}
+
+        merge_request_attribution(kwargs)
+
+        assert kwargs["headers"] == [
+            ("X-Other", "value"),
+            (SOURCE_HEADER, "stream-agent"),
+        ]
 
 
 class TestSdkClientCarriesHeaderNatively:
