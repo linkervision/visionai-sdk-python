@@ -353,12 +353,22 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
 
     Raises:
         ValueError: if this is the first call and ``allowed_destination_hosts``
-            was omitted.
+            was omitted, or if it was given but names no actual destination
+            (an empty list, or one containing only blank strings).
     """
     global _instrumented, _allowed_destination_hosts, _lifetime_check_registered
 
     if allowed_destination_hosts is not None:
-        _allowed_destination_hosts = tuple(allowed_destination_hosts)
+        hosts = tuple(allowed_destination_hosts)
+        if not any(host and host.strip() for host in hosts):
+            raise ValueError(
+                "allowed_destination_hosts must name at least one destination "
+                "-- an empty list (or one containing only blank strings) "
+                "silently matches nothing, indistinguishable from attribution "
+                "never being wired up (see SUGGESTED_ALLOWED_DESTINATION_HOSTS "
+                "for a starting point)."
+            )
+        _allowed_destination_hosts = hosts
     elif not _instrumented:
         raise ValueError(
             "instrument() requires allowed_destination_hosts on the first "

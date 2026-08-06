@@ -352,6 +352,20 @@ class TestDestinationScoping:
         with pytest.raises(ValueError, match="allowed_destination_hosts"):
             instrumentation.instrument()
 
+    def test_empty_list_raises(self, monkeypatch):
+        """Regression: an empty list passed `is not None`, so it silently
+        produced an allowlist that matches nothing -- indistinguishable from
+        the allowlist simply not being configured, but with no warning at
+        all, unlike the omitted-argument case above."""
+        with pytest.raises(ValueError, match="allowed_destination_hosts"):
+            instrumentation.instrument(allowed_destination_hosts=[])
+
+    def test_blank_strings_only_raises(self, monkeypatch):
+        """Regression: [""] (e.g. from os.environ.get(...).split(",") on an
+        unset/empty env var) also `is not None` and also matches nothing."""
+        with pytest.raises(ValueError, match="allowed_destination_hosts"):
+            instrumentation.instrument(allowed_destination_hosts=["", "  "])
+
     def test_explicit_allowlist_permits_a_named_host(self, url, instrumented):
         assert requests.Session().get(url).text == "stream-agent"
 
