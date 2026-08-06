@@ -1077,7 +1077,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'aiohttp'", specifier = ">=3.9,<4" },
     { name = "cryptography", specifier = ">=46.0.5" },
-    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyjwt", extras = ["cryptography"], specifier = ">=2.8.0" },
     { name = "requests", marker = "extra == 'requests'", specifier = ">=2.31,<3" },
@@ -1087,10 +1087,10 @@ provides-extras = ["requests", "aiohttp", "instrumentation"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "aiohttp", specifier = ">=3.9" },
+    { name = "aiohttp", specifier = ">=3.9,<4" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=0.25.0" },
-    { name = "requests", specifier = ">=2.31" },
+    { name = "requests", specifier = ">=2.31,<3" },
     { name = "ruff", specifier = ">=0.15.11" },
     { name = "wrapt", specifier = ">=1.16,<3" },
 ]

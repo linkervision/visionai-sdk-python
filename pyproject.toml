@@ -8,7 +8,14 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28.1",
+    # <1 guards the same class of risk requests/aiohttp/wrapt are bounded
+    # against below. httpx is still pre-1.0, so a minor release could in
+    # principle rename Client._send_single_request/AsyncClient._send_single_request
+    # (the private APIs instrument() patches) without a major bump -- the
+    # weekly CI compatibility matrix plus instrument()'s AttributeError
+    # warning are what actually catches that; a tight upper bound here would
+    # just fight other packages' own httpx pins for little benefit.
+    "httpx>=0.28.1,<1",
     "pydantic>=2.12.5",
     "cryptography>=46.0.5",
     "PyJWT[cryptography]>=2.8.0",
@@ -36,8 +43,8 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.25.0",
     "ruff>=0.15.11",
-    "requests>=2.31",
-    "aiohttp>=3.9",
+    "requests>=2.31,<3",
+    "aiohttp>=3.9,<4",
     "wrapt>=1.16,<3",
 ]
 
