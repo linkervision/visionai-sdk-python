@@ -419,12 +419,27 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
     Raises:
         ValueError: if this is the first call and ``allowed_destination_hosts``
             was omitted, or if it was given but names no actual destination
-            (an empty list, or one containing only blank strings).
+            (an empty list, one containing only blank strings, or a bare
+            string instead of a list of patterns -- a bare string is itself
+            iterable character-by-character, which ``tuple()`` would
+            otherwise accept silently, turning a typo like
+            ``allowed_destination_hosts="*.example.com"`` (missing the
+            brackets) into a set of single-character patterns including a
+            lone ``"*"``, which matches every host).
     """
     global _instrumented, _allowed_destination_hosts, _lifetime_check_registered
     global _instrumented_at
 
     if allowed_destination_hosts is not None:
+        if isinstance(allowed_destination_hosts, (str, bytes)):
+            raise ValueError(
+                "allowed_destination_hosts must be a list of hostname "
+                "patterns, not a bare string -- a string is itself iterable "
+                "character-by-character, which would otherwise be accepted "
+                "silently as a set of single-character patterns (e.g. a "
+                "lone '*', matching every host). Wrap it in a list: "
+                f"allowed_destination_hosts=[{allowed_destination_hosts!r}]."
+            )
         hosts = tuple(allowed_destination_hosts)
         if not any(host and host.strip() for host in hosts):
             raise ValueError(

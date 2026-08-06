@@ -427,6 +427,17 @@ class TestDestinationScoping:
         with pytest.raises(ValueError, match="allowed_destination_hosts"):
             instrumentation.instrument(allowed_destination_hosts=["", "  "])
 
+    def test_bare_string_raises(self, monkeypatch):
+        """Regression: a bare string (missing the [...]) is itself iterable
+        character-by-character, so tuple(...) silently accepted it as a set
+        of single-character patterns -- including a lone "*", which matches
+        every host, flipping fail-closed into fail-open. Reproduced before
+        fixing: allowed_destination_hosts="*.svc.cluster.local" became 19
+        single-character patterns and matched stripe.com and any other
+        host."""
+        with pytest.raises(ValueError, match="bare string"):
+            instrumentation.instrument(allowed_destination_hosts="*.svc.cluster.local")
+
     def test_explicit_allowlist_permits_a_named_host(self, url, instrumented):
         assert requests.Session().get(url).text == "stream-agent"
 
