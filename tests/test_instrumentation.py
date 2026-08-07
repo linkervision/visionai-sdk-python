@@ -333,6 +333,28 @@ class TestStartupWarnsIfSourceEnvVarUnset:
         finally:
             instrumentation.uninstrument()
 
+    def test_warns_when_source_env_var_is_set_but_empty(self, monkeypatch):
+        """Regression: os.environ.get() returns "" (not None) for
+        VISIONAI_SERVICE_SOURCE="", so the unset-check alone would miss it --
+        and _validate() treats a blank value as absent and returns None
+        *without* warning, so neither path catches it on its own. Empty is
+        the likely real-world shape of "left out of Helm values" (a blank
+        ConfigMap key, `value: ""`), not a rare edge case."""
+        monkeypatch.setenv(SOURCE_ENV_VAR, "")
+        try:
+            with pytest.warns(RuntimeWarning, match=SOURCE_ENV_VAR):
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        finally:
+            instrumentation.uninstrument()
+
+    def test_warns_when_source_env_var_is_whitespace_only(self, monkeypatch):
+        monkeypatch.setenv(SOURCE_ENV_VAR, "   ")
+        try:
+            with pytest.warns(RuntimeWarning, match=SOURCE_ENV_VAR):
+                instrumentation.instrument(allowed_destination_hosts=["127.0.0.1"])
+        finally:
+            instrumentation.uninstrument()
+
     def test_no_warning_when_source_env_var_is_set(self, monkeypatch):
         monkeypatch.setenv(SOURCE_ENV_VAR, "stream-agent")
         try:

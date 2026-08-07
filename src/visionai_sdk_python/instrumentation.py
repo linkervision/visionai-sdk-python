@@ -481,21 +481,27 @@ def instrument(allowed_destination_hosts: list[str] | None = None) -> None:
         atexit.register(_warn_if_never_matched)
         _lifetime_check_registered = True
 
-    if os.environ.get(SOURCE_ENV_VAR) is None:
+    _raw_source = os.environ.get(SOURCE_ENV_VAR)
+    if _raw_source is None or not _raw_source.strip():
         # Checked against the raw env var, not _source_value() -- a value
         # that's set but fails validation already gets its own warning (from
         # _validate(), on every request), and reporting that case as "unset"
-        # here too would misdescribe it.
+        # here too would misdescribe it. But _validate() itself treats an
+        # empty/whitespace-only value as absent and returns None *without*
+        # warning (it's not "malformed", just blank), so that case needs to
+        # be caught here too -- otherwise it's silent on both sides, and
+        # empty is the likely real-world shape of "left out of Helm values"
+        # (a blank ConfigMap key, `value: ""`), not a rare edge case.
         warnings.warn(
             f"visionai_sdk_python: instrument() was called but {SOURCE_ENV_VAR} "
-            f"is unset -- outbound requests will carry no {SOURCE_HEADER} at "
-            "all (unless every call happens inside a current_origin() scope "
-            "that already has a value). A correct allowed_destination_hosts "
-            "won't surface this: destination matching, and therefore the "
-            "allowlist-never-matched warning, doesn't depend on whether a "
-            "header was actually injected. This is usually a missing "
-            "environment variable (e.g. left out of Helm values), not "
-            "intentional.",
+            f"is unset or empty -- outbound requests will carry no "
+            f"{SOURCE_HEADER} at all (unless every call happens inside a "
+            "current_origin() scope that already has a value). A correct "
+            "allowed_destination_hosts won't surface this: destination "
+            "matching, and therefore the allowlist-never-matched warning, "
+            "doesn't depend on whether a header was actually injected. This "
+            "is usually a missing environment variable (e.g. left out of "
+            "Helm values), not intentional.",
             RuntimeWarning,
             stacklevel=2,
         )
