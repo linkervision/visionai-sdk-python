@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Exercise the supported dependency ranges even when the repository is quiet.
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, test, and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: pyproject.toml
+
+      - name: Install locked dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Check lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Build package
+        run: uv build
+
+  dependency-compatibility:
+    name: Dependency compatibility (${{ matrix.dependencies }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dependencies: [minimum, latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install project and test dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Install minimum supported HTTP dependencies
+        if: matrix.dependencies == 'minimum'
+        run: >-
+          uv pip install
+          "httpx==0.28.1"
+          "requests==2.31.*"
+          "aiohttp==3.9.*"
+          "wrapt==1.16.*"
+
+      - name: Install latest supported HTTP dependencies
+        if: matrix.dependencies == 'latest'
+        run: >-
+          uv pip install --upgrade
+          "httpx>=0.28.1"
+          "requests>=2.31,<3"
+          "aiohttp>=3.9,<4"
+          "wrapt>=1.16,<3"
+
+      - name: Show resolved dependency versions
+        run: uv pip freeze
+
+      - name: Check dependency consistency
+        run: uv pip check
+
+      - name: Run tests
+        run: uv run --no-sync pytest

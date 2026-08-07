@@ -1,0 +1,36 @@
+version: 2
+
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "02:00"
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 3
+    groups:
+      instrumentation-http-clients:
+        patterns:
+          - httpx
+          - requests
+          - aiohttp
+          - wrapt
+    open-pull-requests-limit: 1
+    versioning-strategy: lockfile-only
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "02:30"
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 1
