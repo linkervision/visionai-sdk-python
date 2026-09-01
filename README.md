@@ -9,6 +9,7 @@ Python client library for VisionAI authentication and Vision Language Model (VLM
 - **Auto Token Management**: Automatic token refresh before expiration
 - **JWT Validation**: Built-in token signature and expiration verification
 - **VLM Inference**: Submit and poll vision-language model tasks
+- **Resize Planning**: Compute VLM input dimensions (smart resize / square / longest edge) without any image dependency — the caller does the actual resize
 - **Async Support**: Full async/await support with `AsyncClient`
 - **Type Safe**: Full type hints with Pydantic validation
 - **Service Source Attribution**: Auto-attach a service-source header to every outbound `requests`/`httpx`/`aiohttp` call with a single startup call
@@ -168,6 +169,35 @@ elif result.status in ("failed", "timeout"):
 - `completed`: Success, check `message`
 - `failed`: Error, check `error`
 - `timeout`: Request timeout
+
+### Resize Planning
+
+Compute the target dimensions for a VLM input image. Pure math, no image
+dependencies — resize with whatever library your service already uses,
+applying `plan.resampling`:
+
+```python
+from visionai_sdk_python.vlm import RESIZE_OPTIONS, compute_resize
+
+# From a shared UI option (single source of truth — do not copy this table)
+plan = compute_resize(1080, 1920, **RESIZE_OPTIONS["smart_768_p32"])
+# ResizePlan(width=1024, height=576, resampling='bilinear')
+
+# Or explicit modes (pick exactly one)
+compute_resize(h, w, factor=32, max_pixels=768 * 768)  # smart: patch-aligned, pixel-capped
+compute_resize(h, w, square=384)                       # exact n x n
+compute_resize(h, w, longest_edge=768)                 # cap longer side, never upscales
+
+# Apply with your own imaging library (PIL shown; see module docstring for cv2)
+resampling = {"bilinear": Image.Resampling.BILINEAR,
+              "bicubic": Image.Resampling.BICUBIC,
+              "lanczos": Image.Resampling.LANCZOS}[plan.resampling]
+img = img.resize((plan.width, plan.height), resampling)
+```
+
+Invalid input (non-positive dimensions or targets, conflicting modes,
+`min_pixels > max_pixels`, an unsatisfiable pixel budget, unknown
+`resampling`) raises `ValueError`.
 
 ## Token Validation
 
