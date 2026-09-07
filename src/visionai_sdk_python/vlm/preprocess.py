@@ -1,94 +1,48 @@
 """Image-resize planning helpers for VLM inference.
 
 This module only computes target dimensions (pure math, no image
-dependencies). The actual resize is done by the caller with whatever
-imaging library its pipeline already uses, applying ``plan.resampling``:
+dependencies). The mode (``name``), ``factor``, and ``interpolation`` come
+from the model server's resize spec; ``pixels`` comes from the UI resize
+option. The actual resize is done by the caller with whatever imaging
+library its pipeline already uses, applying ``plan.interpolation``:
 
-    plan = compute_resize(h, w, **RESIZE_OPTIONS["smart_768_p32"])
+    plan = compute_resize(
+        width=w, height=h, name="smart_resize", factor=32, pixels=768,
+        interpolation="bicubic",
+    )
 
     # PIL client
-    PIL_RESAMPLING = {
-        "bilinear": Image.Resampling.BILINEAR,
+    PIL_INTERPOLATION = {
         "bicubic": Image.Resampling.BICUBIC,
         "lanczos": Image.Resampling.LANCZOS,
     }
-    out = img.resize((plan.width, plan.height), PIL_RESAMPLING[plan.resampling])
+    out = img.resize((plan.width, plan.height), PIL_INTERPOLATION[plan.interpolation])
 
     # OpenCV client
-    CV2_RESAMPLING = {
-        "bilinear": cv2.INTER_LINEAR,
+    CV2_INTERPOLATION = {
         "bicubic": cv2.INTER_CUBIC,
         "lanczos": cv2.INTER_LANCZOS4,
     }
     out = cv2.resize(
-        arr, (plan.width, plan.height), interpolation=CV2_RESAMPLING[plan.resampling]
+        arr, (plan.width, plan.height), interpolation=CV2_INTERPOLATION[plan.interpolation]
     )
 """
 
 import math
-from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Any, Literal, NamedTuple, get_args
+from typing import Literal, NamedTuple, get_args
 
 _MAX_ASPECT_RATIO = 200
 
-Resampling = Literal["bilinear", "lanczos", "bicubic"]
-
-# UI resize options -> compute_resize kwargs. Single source of truth shared
-# by all services; do not copy this table into service code. Interim until
-# the model server serves the resize spec per model, then this table goes
-# away and its kwargs arrive from that API instead. Read-only on purpose:
-# mutating an entry would silently repoint every caller in the process.
-RESIZE_OPTIONS: Mapping[str, Mapping[str, Any]] = MappingProxyType(
-    {
-        name: MappingProxyType(kwargs)
-        for name, kwargs in {
-            "square_384": {"square": 384, "resampling": "bilinear"},
-            "square_512": {"square": 512, "resampling": "bilinear"},
-            "longest_384": {"longest_edge": 384, "resampling": "bilinear"},
-            "longest_512": {"longest_edge": 512, "resampling": "bilinear"},
-            "longest_768": {"longest_edge": 768, "resampling": "bilinear"},
-            "smart_384_p32": {
-                "factor": 32,
-                "max_pixels": 384 * 384,
-                "resampling": "bilinear",
-            },
-            "smart_384_p48": {
-                "factor": 48,
-                "max_pixels": 384 * 384,
-                "resampling": "bicubic",
-            },
-            "smart_512_p32": {
-                "factor": 32,
-                "max_pixels": 512 * 512,
-                "resampling": "bilinear",
-            },
-            "smart_576_p48": {
-                "factor": 48,
-                "max_pixels": 576 * 576,
-                "resampling": "bicubic",
-            },
-            "smart_768_p32": {
-                "factor": 32,
-                "max_pixels": 768 * 768,
-                "resampling": "bilinear",
-            },
-            "smart_768_p48": {
-                "factor": 48,
-                "max_pixels": 768 * 768,
-                "resampling": "bicubic",
-            },
-        }.items()
-    }
-)
+ResizeMode = Literal["smart_resize", "square_resize"]
+Interpolation = Literal["bicubic", "lanczos"]
 
 
 class ResizePlan(NamedTuple):
-    """Target dimensions and resampling method for a client-side resize."""
+    """Target dimensions and interpolation method for a client-side resize."""
 
     width: int
     height: int
-    resampling: Resampling
+    interpolation: Interpolation
 
 
 def _smart_resize(
@@ -112,8 +66,8 @@ def _smart_resize(
             "absolute aspect ratio must be smaller than "
             f"{_MAX_ASPECT_RATIO}, got {max(height, width) / min(height, width)}"
         )
-    h_bar = round(height / factor) * factor
-    w_bar = round(width / factor) * factor
+    h_bar = max(factor, round(height / factor) * factor)
+    w_bar = max(factor, round(width / factor) * factor)
     if h_bar * w_bar > max_pixels:
         beta = math.sqrt((height * width) / max_pixels)
         h_bar = max(factor, math.floor(height / beta / factor) * factor)
@@ -131,98 +85,93 @@ def _smart_resize(
 
 
 def compute_resize(
-    height: int,
-    width: int,
     *,
+    width: int,
+    height: int,
+    name: ResizeMode,
+    pixels: int,
+    interpolation: Interpolation,
     factor: int | None = None,
     min_pixels: int | None = None,
-    max_pixels: int | None = None,
-    size: tuple[int, int] | None = None,
-    square: int | None = None,
-    longest_edge: int | None = None,
-    resampling: Resampling = "bilinear",
 ) -> ResizePlan:
-    """Plan a VLM-input resize. One function, four modes; pick exactly one:
+    """Plan a VLM-input resize from the model server's resize spec.
 
-    - ``factor=..., max_pixels=...`` — smart resize: dimensions divisible by
-      ``factor``, pixel count within [``min_pixels``, ``max_pixels``], aspect
-      ratio kept. ``min_pixels`` defaults to ``4 * factor * factor`` (the
-      Qwen2-VL convention).
-    - ``size=(width, height)`` — exact resize; aspect ratio not preserved.
-    - ``square=n`` — resize to n x n; aspect ratio not preserved.
-    - ``longest_edge=n`` — scale so the longer side becomes n, keeping the
-      aspect ratio. Never upscales: an image already smaller keeps its
-      original dimensions.
+    All arguments are keyword-only — a transposed width/height cannot happen
+    silently. ``name``, ``factor``, and ``interpolation`` mirror the model
+    server's resize spec fields; ``pixels`` is the UI resize option value.
+
+    - ``name="smart_resize"`` — dimensions divisible by ``factor``, total
+      pixel count within [``min_pixels``, ``pixels * pixels``], aspect ratio
+      kept. ``factor`` is required (the model's patch size, e.g. 32 or 48);
+      ``min_pixels`` defaults to ``4 * factor * factor``.
+    - ``name="square_resize"`` — exact ``pixels`` x ``pixels``; aspect ratio
+      not preserved. ``factor`` has no meaning and is ignored, so a whole
+      server resize spec can be forwarded as-is.
 
     Args:
-        height: Source image height in pixels.
         width: Source image width in pixels.
-        factor: Smart resize: round dimensions to multiples of this.
-        min_pixels: Smart resize: lower bound on output pixel count.
-        max_pixels: Smart resize: upper bound on output pixel count.
-        size: Target (width, height) for exact resize.
-        square: Target side length for square resize.
-        longest_edge: Target length of the longer side.
-        resampling: Interpolation the caller should resize with:
-            "bilinear" (default), "lanczos", or "bicubic". Passed through
+        height: Source image height in pixels.
+        name: Resize mode from the model server: "smart_resize" or
+            "square_resize".
+        pixels: UI pixel option — one number, but its meaning depends on
+            ``name``:
+
+            - ``"smart_resize"``: an area budget, not a side length. The
+              output area is capped at ``pixels * pixels`` while keeping the
+              source aspect ratio, so neither output side is generally equal
+              to ``pixels`` — e.g. ``pixels=768`` on a 1920x1080 frame gives
+              1024x576 (= 589,824 px, the same area as 768x768).
+            - ``"square_resize"``: the exact side length. The output is
+              always ``pixels`` x ``pixels`` — e.g. ``pixels=384`` gives
+              384x384 regardless of the source shape.
+        interpolation: Interpolation the caller should resize with,
+            from the model server: "bicubic" or "lanczos". Passed through
             into the returned plan.
+        factor: Smart resize only: round dimensions to multiples of this.
+        min_pixels: Smart resize only: lower bound on output pixel count.
 
     Returns:
-        ResizePlan(width, height, resampling) — note width-first, matching
-        the (width, height) order PIL and OpenCV resize calls expect.
+        ResizePlan(width, height, interpolation) — note width-first,
+        matching the (width, height) order PIL and OpenCV resize calls expect.
 
     Raises:
-        ValueError: If height/width are not positive, not exactly one mode
-            is selected, a target value is not positive, smart resize is
-            missing ``factor`` or ``max_pixels``, ``min_pixels`` exceeds
-            ``max_pixels``, the constraints cannot be satisfied (extreme
-            aspect ratio), or ``resampling`` is not a supported value.
+        ValueError: If height/width are not positive, ``pixels`` or ``factor``
+            is not a positive integer, ``name`` or ``interpolation`` is not a
+            supported value, ``factor`` is missing (smart), ``min_pixels`` is
+            given for square resize or exceeds the pixel budget, or the
+            constraints cannot be satisfied (extreme aspect ratio).
     """
     if height <= 0 or width <= 0:
         raise ValueError(f"height and width must be positive, got {width}x{height}")
-    if resampling not in get_args(Resampling):
+    if name not in get_args(ResizeMode):
+        raise ValueError(f"name must be one of {get_args(ResizeMode)}, got {name!r}")
+    if interpolation not in get_args(Interpolation):
         raise ValueError(
-            f"resampling must be one of {get_args(Resampling)}, got {resampling!r}"
+            f"interpolation must be one of {get_args(Interpolation)}, "
+            f"got {interpolation!r}"
         )
+    if isinstance(pixels, bool) or not isinstance(pixels, int) or pixels <= 0:
+        raise ValueError(f"pixels must be a positive integer, got {pixels!r}")
 
-    smart = any(p is not None for p in (factor, min_pixels, max_pixels))
-    modes = [m for m in (size, square, longest_edge) if m is not None]
-    if smart + len(modes) != 1:
-        raise ValueError(
-            "pass exactly one mode: factor/min_pixels/max_pixels (smart), "
-            "size, square, or longest_edge"
-        )
-
-    if smart:
-        if factor is None or max_pixels is None:
-            raise ValueError("smart resize requires both factor and max_pixels")
-        if factor <= 0 or max_pixels <= 0:
-            raise ValueError(
-                f"factor and max_pixels must be positive, got "
-                f"factor={factor}, max_pixels={max_pixels}"
-            )
+    if name == "smart_resize":
+        if factor is None:
+            raise ValueError("smart_resize requires factor")
+        if isinstance(factor, bool) or not isinstance(factor, int) or factor <= 0:
+            raise ValueError(f"factor must be a positive integer, got {factor!r}")
+        max_pixels = pixels * pixels
         if min_pixels is None:
             min_pixels = 4 * factor * factor
         if min_pixels <= 0 or min_pixels > max_pixels:
             raise ValueError(
-                f"min_pixels must be in (0, max_pixels], got "
-                f"min_pixels={min_pixels}, max_pixels={max_pixels}"
+                f"min_pixels must be in (0, pixels * pixels], got "
+                f"min_pixels={min_pixels}, pixels={pixels}"
             )
         h_bar, w_bar = _smart_resize(height, width, factor, min_pixels, max_pixels)
-    elif size is not None:
-        w_bar, h_bar = size
-        if w_bar <= 0 or h_bar <= 0:
-            raise ValueError(f"size must be positive, got {size}")
-    elif square is not None:
-        if square <= 0:
-            raise ValueError(f"square must be positive, got {square}")
-        w_bar = h_bar = square
     else:
-        assert longest_edge is not None
-        if longest_edge <= 0:
-            raise ValueError(f"longest_edge must be positive, got {longest_edge}")
-        scale = min(1.0, longest_edge / max(height, width))
-        w_bar = max(1, round(width * scale))
-        h_bar = max(1, round(height * scale))
+        # factor is part of the server resize spec, so a caller forwarding the
+        # whole spec may pass it; it has no meaning here, so ignore it.
+        if min_pixels is not None:
+            raise ValueError("min_pixels only applies to smart_resize")
+        w_bar = h_bar = pixels
 
-    return ResizePlan(width=w_bar, height=h_bar, resampling=resampling)
+    return ResizePlan(width=w_bar, height=h_bar, interpolation=interpolation)
