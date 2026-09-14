@@ -29,12 +29,21 @@ library its pipeline already uses, applying ``plan.interpolation``:
 """
 
 import math
-from typing import Literal, NamedTuple, get_args
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Literal, NamedTuple, get_args
 
 _MAX_ASPECT_RATIO = 200
 
 ResizeMode = Literal["smart_resize", "square_resize"]
 Interpolation = Literal["bicubic", "lanczos"]
+
+# Fallback resize spec for when the model server does not provide one.
+# Read-only; splat it into compute_resize alongside the UI pixels value:
+#     compute_resize(width=w, height=h, pixels=768, **DEFAULT_RESIZE_SPEC)
+DEFAULT_RESIZE_SPEC: Mapping[str, Any] = MappingProxyType(
+    {"name": "smart_resize", "factor": 32, "interpolation": "bicubic"}
+)
 
 
 class ResizePlan(NamedTuple):

@@ -191,6 +191,11 @@ compute_resize(width=w, height=h, name="square_resize", pixels=384, interpolatio
 # square_resize: exact pixels x pixels; factor is ignored, so a whole resize
 # spec can be forwarded as-is
 
+# No resize spec from the model server? Fall back to the default
+# (smart_resize, factor 32, bicubic):
+from visionai_sdk_python.vlm import DEFAULT_RESIZE_SPEC
+plan = compute_resize(width=w, height=h, pixels=768, **DEFAULT_RESIZE_SPEC)
+
 # Apply with your own imaging library (PIL shown; see module docstring for cv2)
 interpolation = {"bicubic": Image.Resampling.BICUBIC,
                  "lanczos": Image.Resampling.LANCZOS}[plan.interpolation]

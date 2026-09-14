@@ -195,3 +195,19 @@ def test_rejects_unknown_interpolation():
     # bilinear is no longer a supported value.
     with pytest.raises(ValueError, match="interpolation must be one of"):
         smart(1920, 1080, interpolation="bilinear")
+
+
+def test_default_resize_spec():
+    from visionai_sdk_python.vlm import DEFAULT_RESIZE_SPEC
+
+    plan = compute_resize(width=1920, height=1080, pixels=768, **DEFAULT_RESIZE_SPEC)
+    assert plan == compute_resize(
+        width=1920,
+        height=1080,
+        pixels=768,
+        name="smart_resize",
+        factor=32,
+        interpolation="bicubic",
+    )
+    with pytest.raises(TypeError):
+        DEFAULT_RESIZE_SPEC["factor"] = 48  # type: ignore[index]
