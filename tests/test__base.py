@@ -2,6 +2,7 @@ import jwt
 import pytest
 
 from visionai_sdk_python._base import _BaseClient
+from visionai_sdk_python.constants import resolve_allowed_issuers
 
 
 def test_init_stores_attributes() -> None:
@@ -59,9 +60,68 @@ def test_auth_header_raises_on_empty_token() -> None:
         _BaseClient._build_auth_header(access_token="")
 
 
+_KEYCLOAK_SITES = [
+    "https://staging.visionai.linkervision.com",
+    "https://dev.visionai.linkervision.com",
+    "https://dev2.visionai.linkervision.com",
+    "https://dev3.visionai.linkervision.com",
+    "https://offline.visionai.linkervision.com",
+    "https://lighthouse.visionai.linkervision.ai",
+    "https://lighthouse-production.visionai.linkervision.ai",
+]
+
+
+@pytest.mark.parametrize("auth_url", _KEYCLOAK_SITES)
+def test_resolve_allowed_issuers_for_keycloak_sites(auth_url: str) -> None:
+    """Every site that has cut over to Keycloak resolves to its realm issuer."""
+    assert resolve_allowed_issuers(auth_url) == [
+        f"{auth_url}/keycloak/realms/linker-platform"
+    ]
+
+
+def test_resolve_allowed_issuers_for_auth0_site() -> None:
+    """Production is the last Auth0 site and keeps its tenant issuer."""
+    assert resolve_allowed_issuers("https://visionai.linkervision.com") == [
+        "https://data-engine-prod.us.auth0.com"
+    ]
+
+
+def test_resolve_allowed_issuers_falls_back_to_keycloak() -> None:
+    """An unknown host is assumed to be a Keycloak deployment."""
+    assert resolve_allowed_issuers("https://somewhere.example.com") == [
+        "https://somewhere.example.com/keycloak/realms/linker-platform"
+    ]
+
+
+@pytest.mark.parametrize(
+    "auth_url",
+    [
+        "https://dev.visionai.linkervision.com/",
+        "https://dev.visionai.linkervision.com///",
+    ],
+)
+def test_resolve_allowed_issuers_ignores_trailing_slashes(auth_url: str) -> None:
+    assert resolve_allowed_issuers(auth_url) == [
+        "https://dev.visionai.linkervision.com/keycloak/realms/linker-platform"
+    ]
+
+
+def test_client_defaults_to_resolved_issuers() -> None:
+    """Omitting allowed_issuers pins the client to the site's own issuer."""
+    client = _BaseClient(
+        auth_url="https://dev.visionai.linkervision.com",
+        vlm_url="https://vlm.example.com",
+    )
+    client._jwt_verifier._validate_issuer(
+        "https://dev.visionai.linkervision.com/keycloak/realms/linker-platform"
+    )
+    with pytest.raises(jwt.InvalidIssuerError):
+        client._jwt_verifier._validate_issuer("https://data-engine-dev2.jp.auth0.com")
+
+
 _ALLOWED_ISSUERS = [
     "https://offline.visionai.linkervision.com/keycloak/realms/linker-platform",
-    "https://data-engine-staging.jp.auth0.com",
+    "https://data-engine-prod.us.auth0.com",
 ]
 
 

@@ -7,27 +7,26 @@
 
 _KEYCLOAK_REALM_PATH = "/keycloak/realms/linker-platform"
 
-# On-premise deployments backed by Keycloak (realm: linker-platform).
+# Deployments backed by Keycloak (realm: linker-platform).
 # Issuer = base_url + _KEYCLOAK_REALM_PATH for all entries.
+#
+# The staging/dev/dev2/dev3 sites used to be Auth0 tenants and were cut over to
+# Keycloak; their Auth0 tenants no longer issue tokens, so the old issuers are
+# deliberately not kept alongside the new ones.
 _KEYCLOAK_BASE_URLS: list[str] = [
+    "https://staging.visionai.linkervision.com",
+    "https://dev.visionai.linkervision.com",
+    "https://dev2.visionai.linkervision.com",
+    "https://dev3.visionai.linkervision.com",
     "https://offline.visionai.linkervision.com",
     "https://lighthouse.visionai.linkervision.ai",
     "https://lighthouse-production.visionai.linkervision.ai",
 ]
 
-# Cloud deployments backed by Auth0 (one tenant per environment).
+# Deployments still backed by Auth0 (one tenant per environment).
 _AUTH0_URL_TO_ISSUERS: dict[str, list[str]] = {
     "https://visionai.linkervision.com": [
         "https://data-engine-prod.us.auth0.com",
-    ],
-    "https://staging.visionai.linkervision.com": [
-        "https://data-engine-staging.jp.auth0.com",
-    ],
-    "https://dev2.visionai.linkervision.com": [
-        "https://data-engine-dev2.jp.auth0.com",
-    ],
-    "https://dev.visionai.linkervision.com": [
-        "https://dev-045acunea5v1mm3l.us.auth0.com",
     ],
 }
 
