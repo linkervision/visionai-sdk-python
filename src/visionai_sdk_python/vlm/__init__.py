@@ -2,12 +2,24 @@
 
 from .async_resource import AsyncVLMResource
 from .models import NIMRequestModel, ResponseErrorModel, ResponseNormalModel
+from .preprocess import (
+    DEFAULT_RESIZE_SPEC,
+    Interpolation,
+    ResizeMode,
+    ResizePlan,
+    compute_resize,
+)
 from .resource import VLMResource
 
 __all__ = [
+    "DEFAULT_RESIZE_SPEC",
     "AsyncVLMResource",
-    "VLMResource",
+    "Interpolation",
     "NIMRequestModel",
-    "ResponseNormalModel",
+    "ResizeMode",
+    "ResizePlan",
     "ResponseErrorModel",
+    "ResponseNormalModel",
+    "VLMResource",
+    "compute_resize",
 ]
