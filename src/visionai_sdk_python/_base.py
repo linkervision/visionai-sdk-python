@@ -38,7 +38,7 @@ class _BaseClient:
             vlm_url: Base URL for the VLM inference service.
             allowed_issuers: Optional list of allowed JWT issuers. If provided, tokens
                 whose ``iss`` claim is not in this list will be rejected. If omitted,
-                issuer validation is skipped.
+                the issuers are derived from ``auth_url``.
             verify_ssl: Whether to verify TLS certificates.
             timeout: Default request timeout in seconds.
             max_connections: Maximum number of concurrent connections in the pool.
