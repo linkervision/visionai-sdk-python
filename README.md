@@ -232,6 +232,25 @@ client = Client(
 )
 ```
 
+### Token issuers
+
+`allowed_issuers` is optional. When you leave it out, the SDK derives the
+trusted issuers from `auth_url` and accepts a token whose `iss` claim either:
+
+- equals `{auth_url}/keycloak/realms/linker-platform`, the realm every
+  deployment hosts behind its own base URL; or
+- equals an external issuer the site is known to still accept — today only
+  production, which takes its Auth0 tenant alongside Keycloak while it migrates.
+
+That means `auth_url` has to be the site's **public base URL** — the same host
+that appears in the token's `iss` claim. Pointing it at an in-cluster or proxied
+address (for example a backend service URL) derives issuers that no token will
+ever carry, and verification fails with `jwt.InvalidIssuerError`. Pass
+`allowed_issuers` explicitly if you need to talk to a site through such an
+address.
+
+Passing `allowed_issuers` yourself replaces both rules with an exact-match list.
+
 ## Error Handling
 
 ```python
