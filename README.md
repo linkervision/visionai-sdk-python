@@ -191,6 +191,15 @@ compute_resize(width=w, height=h, name="square_resize", pixels=384, interpolatio
 # square_resize: exact pixels x pixels; factor is ignored, so a whole resize
 # spec can be forwarded as-is
 
+# A plan never grows a frame in both dimensions unless you ask it to: a 100x100
+# crop stays 100x100 instead of being blown up to the option's size.
+compute_resize(width=100, height=100, name="square_resize", pixels=768,
+               interpolation="lanczos")
+# ResizePlan(width=100, height=100, interpolation='lanczos')
+compute_resize(width=100, height=100, name="square_resize", pixels=768,
+               interpolation="lanczos", enable_upscale=True)
+# ResizePlan(width=768, height=768, interpolation='lanczos')
+
 # No resize spec from the model server? Fall back to the default
 # (smart_resize, factor 32, bicubic):
 from visionai_sdk_python.vlm import DEFAULT_RESIZE_SPEC

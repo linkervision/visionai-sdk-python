@@ -29,7 +29,7 @@ def smart(width, height, **overrides):
     ],
 )
 def test_smart_constraints(width, height, factor):
-    plan = smart(width, height, factor=factor)
+    plan = smart(width, height, factor=factor, enable_upscale=True)
     assert plan.width % factor == 0
     assert plan.height % factor == 0
     assert 4 * factor * factor <= plan.width * plan.height <= 768 * 768
@@ -82,9 +82,24 @@ def test_smart_rejects_unsatisfiable_min_pixels():
 
 
 def test_smart_min_pixels_defaults_to_four_patches():
-    plan = smart(32, 32)
+    plan = smart(32, 32, enable_upscale=True)
     assert plan.width * plan.height >= 4 * 32 * 32
-    assert plan == smart(32, 32, min_pixels=4 * 32 * 32)
+    assert plan == smart(32, 32, min_pixels=4 * 32 * 32, enable_upscale=True)
+
+
+def test_smart_does_not_upscale_by_default():
+    # min_pixels would blow a 32x32 frame up to 64x64; the model server
+    # preprocesses whatever it gets, so growing it here buys nothing.
+    assert smart(32, 32) == smart(32, 32, enable_upscale=True)._replace(
+        width=32, height=32
+    )
+    assert smart(32, 32, enable_upscale=True).width == 64
+
+
+def test_smart_keeps_a_single_side_growing_to_the_factor_grid():
+    # Only the short side grows, and only because no smaller multiple of the
+    # factor exists -- that is the grid, not an upscale, so it is kept.
+    assert smart(224, 2) == smart(224, 2, enable_upscale=True)
 
 
 def test_smart_requires_factor():
@@ -113,6 +128,28 @@ def test_smart_rejects_min_pixels_over_budget():
 def test_smart_rejects_bad_params(kwargs):
     with pytest.raises(ValueError):
         smart(1920, 1080, **kwargs)
+
+
+def test_square_does_not_upscale_by_default():
+    def square(width, height, **overrides):
+        kwargs = {
+            "width": width,
+            "height": height,
+            "name": "square_resize",
+            "pixels": 768,
+            "interpolation": "lanczos",
+        }
+        kwargs.update(overrides)
+        return compute_resize(**kwargs)
+
+    # A small crop would otherwise be blown up to the full 768x768.
+    assert (square(100, 100).width, square(100, 100).height) == (100, 100)
+    assert (square(500, 400).width, square(500, 400).height) == (400, 400)
+    assert (square(1920, 1080).width, square(1920, 1080).height) == (768, 768)
+    assert (
+        square(100, 100, enable_upscale=True).width,
+        square(100, 100, enable_upscale=True).height,
+    ) == (768, 768)
 
 
 def test_square():

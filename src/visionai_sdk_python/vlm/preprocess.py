@@ -102,6 +102,7 @@ def compute_resize(
     interpolation: Interpolation,
     factor: int | None = None,
     min_pixels: int | None = None,
+    enable_upscale: bool = False,
 ) -> ResizePlan:
     """Plan a VLM-input resize from the model server's resize spec.
 
@@ -138,6 +139,14 @@ def compute_resize(
             into the returned plan.
         factor: Smart resize only: round dimensions to multiples of this.
         min_pixels: Smart resize only: lower bound on output pixel count.
+        enable_upscale: Whether a plan may be larger than the source in both
+            dimensions. Off by default: a frame smaller than the option would
+            otherwise be blown up (``square_resize`` to ``pixels`` x
+            ``pixels``, or ``smart_resize`` up to ``min_pixels``), which costs
+            payload and model tokens without adding detail. A single
+            dimension still grows when the factor grid demands it -- a
+            1280x8 strip plans 1280x32 either way -- since no smaller output
+            can be a multiple of ``factor``.
 
     Returns:
         ResizePlan(width, height, interpolation) — note width-first,
@@ -176,11 +185,19 @@ def compute_resize(
                 f"min_pixels={min_pixels}, pixels={pixels}"
             )
         h_bar, w_bar = _smart_resize(height, width, factor, min_pixels, max_pixels)
+        if not enable_upscale and w_bar > width and h_bar > height:
+            # A pure blow-up (both sides grow), so min_pixels lost: clamp each
+            # side to the source, still on the factor grid. One side growing
+            # on its own is the factor floor, not an upscale, and is kept.
+            w_bar = max(factor, (width // factor) * factor)
+            h_bar = max(factor, (height // factor) * factor)
     else:
         # factor is part of the server resize spec, so a caller forwarding the
         # whole spec may pass it; it has no meaning here, so ignore it.
         if min_pixels is not None:
             raise ValueError("min_pixels only applies to smart_resize")
         w_bar = h_bar = pixels
+        if not enable_upscale:
+            w_bar = h_bar = min(pixels, width, height)
 
     return ResizePlan(width=w_bar, height=h_bar, interpolation=interpolation)
