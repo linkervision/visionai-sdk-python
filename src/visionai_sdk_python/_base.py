@@ -77,10 +77,41 @@ class _BaseClient:
         self._credentials: dict | None = None
         self._credentials_type: Literal["login"] | None = None
 
+    @property
+    def credential(self) -> "ClientCredentials | AsyncClientCredentials | None":
+        """The credential this client was built with, for callers that need the
+        raw token themselves (a WebSocket upgrade, another HTTP library)."""
+        return self._credential
+
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    @staticmethod
+    def _full_url(url: str) -> str:
+        """``request()`` takes a full URL: the client has two bases (``auth_url``,
+        ``vlm_url``), so a bare path would not say which one is meant."""
+        if "://" not in url:
+            raise ValueError(f"request() needs a full URL, got {url!r}")
+        return url
+
+    def _with_auth(self, kwargs: dict, token: str) -> dict:
+        """``kwargs`` for httpx with the bearer header; the client's token wins."""
+        headers = httpx.Headers(kwargs.get("headers"))
+        headers["Authorization"] = f"Bearer {token}"  # case-insensitive: one header
+        return {**kwargs, "headers": headers}
+
+    @staticmethod
+    def _resendable(kwargs: dict) -> bool:
+        """Whether the body can be sent a second time (streams and files cannot)."""
+        content = kwargs.get("content")
+        if content is not None and not isinstance(content, (bytes, str)):
+            return False
+        if kwargs.get("files") is not None:
+            return False
+        data = kwargs.get("data")
+        return data is None or isinstance(data, dict)
 
     def _require_vlm_url(self) -> str:
         if self.vlm_url is None:

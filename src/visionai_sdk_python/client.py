@@ -19,7 +19,10 @@ class Client(_BaseClient):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         credential: ClientCredentials | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
+        """See ``_BaseClient``; ``http_client`` is an httpx.Client to send through
+        (tests, shared pools); the client closes only the one it created."""
         super().__init__(
             auth_url=auth_url,
             vlm_url=vlm_url,
@@ -30,7 +33,7 @@ class Client(_BaseClient):
             max_keepalive_connections=max_keepalive_connections,
             credential=credential,
         )
-        self._client = httpx.Client(
+        self._client = http_client or httpx.Client(
             verify=self.verify_ssl,
             timeout=self.timeout,
             limits=httpx.Limits(
@@ -38,6 +41,7 @@ class Client(_BaseClient):
                 max_keepalive_connections=self.max_keepalive_connections,
             ),
         )
+        self._http_owner = http_client is None  # a client we built is ours to close
         # Register the different function resource
         self.auth = AuthResource(self)
         self.vlm = VLMResource(self)
@@ -51,9 +55,39 @@ class Client(_BaseClient):
             raise from_transport_error(e) from e
         return self._handle_response(response)
 
+    def request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Send any request with this client's bearer token.
+
+        ``url`` is a full URL (the client has two bases); ``kwargs`` go to httpx.
+        With a ``credential``, a 401 buys one retry with the credential's current
+        token, which it replaces when the rejected one is old enough to have been
+        revoked (``REPLACE_COOLDOWN_S``); a 401 on the retry raises. Without a
+        credential, or with a body that cannot be sent twice (a stream or a
+        file), a 401 raises.
+
+        Raises:
+            ValueError: ``url`` is not a full URL.
+            AuthenticationError: No token, or the fresh one was refused too.
+            RateLimitedError, NetworkError, ServerError, ClientError: As the
+                resource methods.
+        """
+        url = self._full_url(url)
+        token = self._ensure_token()
+        try:
+            return self._request(method, url, **self._with_auth(kwargs, token))
+        except AuthenticationError:
+            if self._credential is None or not self._resendable(kwargs):
+                raise
+            self._credential.invalidate(token)
+            replacement = (self._credential.get_token()).token
+            if replacement == token:
+                raise
+        return self._request(method, url, **self._with_auth(kwargs, replacement))
+
     def close(self) -> None:
-        """Close the HTTP client and release connections."""
-        self._client.close()
+        """Close the HTTP client this client created and release its connections."""
+        if self._http_owner:
+            self._client.close()
 
     def __enter__(self) -> "Client":
         """Context manager entry."""

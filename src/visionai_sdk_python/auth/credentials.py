@@ -3,7 +3,8 @@
 A mint is a round trip to Platform and, on sites that cap client tokens, a
 scarce one, so the token is cached until shortly before it expires, one mint
 runs at a time, a refresh that fails keeps the current token while Platform
-still accepts it, and a 429 stops minting for an hour.
+still accepts it, a 401 replaces a token that is old enough to have been
+revoked, and a 429 stops minting for an hour.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ logger = logging.getLogger(__name__)
 REFRESH_BUFFER_S = 300
 # After a 429 no mint is tried for this long.
 RATE_LIMIT_COOLDOWN_S = 3600
+# A 401 on a token minted less than this long ago does not replace it.
+REPLACE_COOLDOWN_S = 30 * 60
 
 _now = time.monotonic
 
@@ -55,7 +58,7 @@ class AccessToken:
 
 
 class _Credentials:
-    """What the sync and async variants share: the cache, the refresh and 429 rules."""
+    """What the sync and async variants share: the cache, the refresh, 401 and 429 rules."""
 
     def __init__(self, auth_url: str, client_id: str, client_secret: str) -> None:
         if not auth_url.strip():
@@ -70,6 +73,7 @@ class _Credentials:
         self._url = _BaseClient._build_url(self.auth_url, AuthEndpoint.CLIENT_TOKEN)
         self._current: AccessToken | None = None  # the token this credential holds
         self._blocked_until = 0.0
+        self._minting = False  # a mint is in flight (set under the lock)
 
     def is_for(self, client_id: str, client_secret: str) -> bool:
         """True when this credential was built for exactly these client credentials."""
@@ -139,6 +143,29 @@ class _Credentials:
         )
         return valid
 
+    def invalidate(self, token: str) -> bool:
+        """Report a 401 for ``token``. True: dropped, so the next ``get_token()`` mints.
+
+        A late report for a token no longer held changes nothing. A token minted
+        less than ``REPLACE_COOLDOWN_S`` ago is kept: a 401 that soon is a client or
+        allowlist problem another mint would not fix, and the cooldown bounds how
+        often a persistent 401 can mint. While a mint is in flight the report is
+        already being acted on.
+        """
+        if self._current is None or token != self._current.token:
+            return False
+        if self._minting:
+            return True
+        if _now() - self._current.issued_at < REPLACE_COOLDOWN_S:
+            logger.warning(
+                "401 on a token minted %d s ago; keeping it until the cooldown ends",
+                int(_now() - self._current.issued_at),
+                extra={"client_id": self.client_id},
+            )
+            return False
+        self._current = None
+        return True
+
 
 class ClientCredentials(_Credentials):
     """Client-credentials token for one Platform client, for sync code.
@@ -179,6 +206,7 @@ class ClientCredentials(_Credentials):
                 fresh = self._fresh()
                 if fresh is not None:
                     return fresh
+            self._minting = True
             try:
                 kwargs = self._begin_mint()
                 try:
@@ -190,6 +218,8 @@ class ClientCredentials(_Credentials):
                 if force_refresh:
                     raise
                 return self._after_failed_refresh(e)
+            finally:
+                self._minting = False
 
     def close(self) -> None:
         if self._http_owner:
@@ -237,6 +267,7 @@ class AsyncClientCredentials(_Credentials):
                 fresh = self._fresh()
                 if fresh is not None:
                     return fresh
+            self._minting = True
             try:
                 kwargs = self._begin_mint()
                 try:
@@ -248,6 +279,8 @@ class AsyncClientCredentials(_Credentials):
                 if force_refresh:
                     raise
                 return self._after_failed_refresh(e)
+            finally:
+                self._minting = False
 
     async def aclose(self) -> None:
         if self._http_owner:
