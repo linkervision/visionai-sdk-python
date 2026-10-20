@@ -23,6 +23,7 @@ from visionai_sdk_python.auth.credentials import (
     RATE_LIMIT_COOLDOWN_S,
     REFRESH_BUFFER_S,
     REFRESH_RETRY_S,
+    REPLACE_COOLDOWN_S,
 )
 from visionai_sdk_python.exceptions import (
     AuthenticationError,
@@ -119,6 +120,25 @@ async def test_concurrent_callers_share_one_mint(platform, cred):
     assert platform.minted == 1
 
 
+async def test_a_401_replaces_a_token_old_enough_to_have_been_revoked(
+    platform, cred, clock, caplog
+):
+    await cred.get_token()
+
+    # Minted moments ago: a 401 now is a client or allowlist problem, not revocation.
+    assert cred.invalidate("tok-1") is False
+    assert (await cred.get_token()).token == "tok-1"
+    assert "keeping it until the cooldown ends" in caplog.text
+
+    clock[0] += REPLACE_COOLDOWN_S + 1
+    assert cred.invalidate("tok-1") is True
+    assert (await cred.get_token()).token == "tok-2"
+    # A late 401 for the old token changes nothing.
+    assert cred.invalidate("tok-1") is False
+    assert (await cred.get_token()).token == "tok-2"
+    assert platform.minted == 2
+
+
 async def test_a_429_stops_minting_for_an_hour(platform, cred, clock):
     platform.status = 429
     with pytest.raises(RateLimitedError):
@@ -181,7 +201,7 @@ def test_empty_arguments_are_rejected(auth_url, client_id, client_secret):
         ClientCredentials(auth_url, client_id, client_secret)
 
 
-def test_sync_credentials_cache(platform, clock):
+def test_sync_credentials_cache_and_replace(platform, clock):
     with ClientCredentials(
         AUTH_URL,
         "cid",
@@ -190,8 +210,12 @@ def test_sync_credentials_cache(platform, clock):
     ) as cred:
         assert cred.get_token().token == "tok-1"
         assert cred.get_token().token == "tok-1"
+        assert cred.invalidate("tok-1") is False  # too young to have been revoked
+        clock[0] += REPLACE_COOLDOWN_S + 1
+        assert cred.invalidate("tok-1") is True
+        assert cred.get_token().token == "tok-2"
 
-    assert platform.minted == 1
+    assert platform.minted == 2
 
 
 class RecordingTransport(httpx.AsyncBaseTransport):
@@ -387,3 +411,35 @@ def test_a_credential_of_the_other_flavour_is_rejected_at_construction():
         Client(AUTH_URL, credential=AsyncClientCredentials(AUTH_URL, "id", "secret"))
     with pytest.raises(TypeError):
         AsyncClient(AUTH_URL, credential=ClientCredentials(AUTH_URL, "id", "secret"))
+
+
+async def test_a_401_reported_during_a_refresh_leaves_the_refresh_alone(
+    platform, clock
+):
+    started, gate = asyncio.Event(), asyncio.Event()
+
+    class Gated(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            started.set()
+            await gate.wait()
+            return platform.handler(request)
+
+    cred = AsyncClientCredentials(
+        AUTH_URL, "cid", "secret", http=httpx.AsyncClient(transport=Gated())
+    )
+    gate.set()
+    assert (await cred.get_token()).token == "tok-1"
+    gate.clear()
+    started.clear()
+
+    clock[0] += EXPIRES_IN  # due for a refresh
+    refresh = asyncio.create_task(cred.get_token())
+    await started.wait()  # the mint is in flight
+    assert cred.invalidate("tok-1") is True  # already being replaced; nothing to do
+    gate.set()
+    assert (await refresh).token == "tok-2"
+
+    # The new token is an ordinary one: droppable once old enough.
+    clock[0] += REPLACE_COOLDOWN_S + 1
+    assert cred.invalidate("tok-2") is True
+    assert platform.minted == 2

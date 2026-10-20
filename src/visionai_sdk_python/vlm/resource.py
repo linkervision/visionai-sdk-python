@@ -28,8 +28,8 @@ class VLMResource(VLMMixin):
     ) -> ResponseNormalModel | ResponseErrorModel:
         """Submit an inference request to the VLM service.
 
-        Uses the internally stored access token obtained from login() or get_access_token().
-        If the token is expiring soon, it will be automatically refreshed.
+        Sent with the client's token (``credential``, ``login()`` or ``get_access_token()``);
+        a 401 gets one fresh token and one retry.
 
         Args:
             payload: Inference parameters as a NIMRequestModel instance or a dict
@@ -45,18 +45,15 @@ class VLMResource(VLMMixin):
             NetworkError: If the request times out or a network error occurs.
             VisionaiSDKError: If the request fails for any other reason.
         """
-        token = self._sdk_client._ensure_token()
-
         # Prepare request (from Mixin)
         body = self._prepare_chat_request(payload)
 
-        # I/O operation (sync)
-        response = self._sdk_client._request(
+        # I/O operation (sync); the client adds the token and retries once on 401
+        response = self._sdk_client.request(
             "POST",
             self._sdk_client._build_url(
                 self._sdk_client._require_vlm_url(), VLMEndpoint.CHAT
             ),
-            headers=self._sdk_client._build_auth_header(token),
             json=body,
         )
 
@@ -66,8 +63,8 @@ class VLMResource(VLMMixin):
     def get_chat(self, result_id: str) -> ResponseNormalModel | ResponseErrorModel:
         """Poll the result of a previously submitted inference request.
 
-        Uses the internally stored access token obtained from login() or get_access_token().
-        If the token is expiring soon, it will be automatically refreshed.
+        Sent with the client's token (``credential``, ``login()`` or ``get_access_token()``);
+        a 401 gets one fresh token and one retry.
 
         Args:
             result_id: Chat result ID returned from a prior chat() call.
@@ -81,15 +78,12 @@ class VLMResource(VLMMixin):
             NetworkError: If the request times out or a network error occurs.
             VisionaiSDKError: If the request fails for any other reason.
         """
-        token = self._sdk_client._ensure_token()
-
-        # I/O operation (sync)
-        response = self._sdk_client._request(
+        # I/O operation (sync); the client adds the token and retries once on 401
+        response = self._sdk_client.request(
             "GET",
             self._sdk_client._build_url(
                 self._sdk_client._require_vlm_url(), f"{VLMEndpoint.CHAT}/{result_id}"
             ),
-            headers=self._sdk_client._build_auth_header(token),
         )
 
         # Parse response (from Mixin)
