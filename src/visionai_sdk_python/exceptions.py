@@ -28,6 +28,13 @@ class PermissionDeniedError(ClientError):
         super().__init__(403, message)
 
 
+class RateLimitedError(ClientError):
+    """429 - Too many requests; on client-token, the monthly mint quota is used up."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(429, message)
+
+
 class ServerError(APIError):
     """5xx - Server-side failure, consider retry."""
 

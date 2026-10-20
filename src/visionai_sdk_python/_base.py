@@ -1,5 +1,5 @@
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 
@@ -9,9 +9,15 @@ from .exceptions import (
     APIError,
     AuthenticationError,
     ClientError,
+    NetworkError,
     PermissionDeniedError,
+    RateLimitedError,
     ServerError,
+    VisionaiSDKError,
 )
+
+if TYPE_CHECKING:
+    from .auth.credentials import AsyncClientCredentials, ClientCredentials
 
 
 class _BaseClient:
@@ -24,18 +30,20 @@ class _BaseClient:
     def __init__(
         self,
         auth_url: str,
-        vlm_url: str,
+        vlm_url: str | None = None,
         allowed_issuers: list[str] | None = None,
         verify_ssl: bool = True,
         timeout: float = 10.0,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
+        credential: "ClientCredentials | AsyncClientCredentials | None" = None,
     ) -> None:
         """Initialize the client with connection settings.
 
         Args:
             auth_url: Base URL for the authentication service.
-            vlm_url: Base URL for the VLM inference service.
+            vlm_url: Base URL for the VLM inference service. Optional for clients
+                that only authenticate; VLM calls then raise ``ValueError``.
             allowed_issuers: Optional list of allowed JWT issuers. If provided, tokens
                 whose ``iss`` claim is not in this list will be rejected. If omitted,
                 the issuers are derived from ``auth_url``.
@@ -43,13 +51,18 @@ class _BaseClient:
             timeout: Default request timeout in seconds.
             max_connections: Maximum number of concurrent connections in the pool.
             max_keepalive_connections: Maximum number of idle keep-alive connections.
+            credential: A ``ClientCredentials`` / ``AsyncClientCredentials`` whose
+                token every call uses; shareable between clients. Without it the
+                client keeps the token from ``auth.login()`` / ``auth.get_access_token()``
+                or ``set_token()``.
         """
         if not auth_url.strip():
             raise ValueError("auth_url must not be empty")
-        if not vlm_url.strip():
+        if vlm_url is not None and not vlm_url.strip():
             raise ValueError("vlm_url must not be empty")
         self.auth_url = auth_url.strip()
-        self.vlm_url = vlm_url.strip()
+        self.vlm_url = vlm_url.strip() if vlm_url is not None else None
+        self._credential = credential
         self.verify_ssl = verify_ssl
         self.timeout = timeout
         self.max_connections = max_connections
@@ -76,6 +89,20 @@ class _BaseClient:
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    def _vlm_base(self) -> str:
+        if self.vlm_url is None:
+            raise ValueError("vlm_url is required for VLM calls; pass it to the client")
+        return self.vlm_url
+
+    @staticmethod
+    def _map_transport_error(error: httpx.RequestError) -> VisionaiSDKError:
+        """The SDK exception for an httpx request that never got a response."""
+        if isinstance(error, httpx.TimeoutException):
+            return NetworkError("Request timed out")
+        if isinstance(error, httpx.NetworkError):
+            return NetworkError(f"Network error: {error}")
+        return VisionaiSDKError(f"Request failed: {error}")
 
     @staticmethod
     def _build_auth_header(access_token: str) -> dict[str, str]:
@@ -201,6 +228,8 @@ class _BaseClient:
                 raise AuthenticationError(detail) from e
             if status == 403:
                 raise PermissionDeniedError(detail) from e
+            if status == 429:
+                raise RateLimitedError(detail) from e
             if 400 <= status < 500:
                 raise ClientError(status, detail) from e
             if 500 <= status < 600:

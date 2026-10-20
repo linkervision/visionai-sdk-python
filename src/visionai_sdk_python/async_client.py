@@ -3,7 +3,8 @@ import httpx
 from ._base import _BaseClient
 from ._request_attribution import merge_request_attribution
 from .auth.async_resource import AsyncAuthResource
-from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
+from .auth.credentials import AsyncClientCredentials
+from .exceptions import AuthenticationError
 from .vlm.async_resource import AsyncVLMResource
 
 
@@ -11,12 +12,13 @@ class AsyncClient(_BaseClient):
     def __init__(
         self,
         auth_url: str,
-        vlm_url: str,
+        vlm_url: str | None = None,
         allowed_issuers: list[str] | None = None,
         verify_ssl: bool = True,
         timeout: float = 10.0,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
+        credential: AsyncClientCredentials | None = None,
     ) -> None:
         super().__init__(
             auth_url=auth_url,
@@ -26,6 +28,7 @@ class AsyncClient(_BaseClient):
             timeout=timeout,
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
+            credential=credential,
         )
         self._client = httpx.AsyncClient(
             verify=self.verify_ssl,
@@ -44,12 +47,8 @@ class AsyncClient(_BaseClient):
         merge_request_attribution(kwargs)
         try:
             response = await self._client.request(method, url, **kwargs)
-        except httpx.TimeoutException as e:
-            raise NetworkError("Request timed out") from e
-        except httpx.NetworkError as e:
-            raise NetworkError(f"Network error: {e}") from e
         except httpx.RequestError as e:
-            raise VisionaiSDKError(f"Request failed: {e}") from e
+            raise self._map_transport_error(e) from e
         return self._handle_response(response)
 
     async def close(self) -> None:
@@ -90,6 +89,9 @@ class AsyncClient(_BaseClient):
         Raises:
             AuthenticationError: If no token is available or token expired without credentials.
         """
+        if self._credential is not None:
+            self._access_token = (await self._credential.get_token()).token
+            return
         if self._access_token is None:
             raise AuthenticationError(
                 "Not authenticated. Call login() or get_access_token() first."

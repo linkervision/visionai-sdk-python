@@ -1,5 +1,6 @@
 """Authentication resource for async operations."""
 
+import time
 from typing import TYPE_CHECKING
 
 import jwt
@@ -7,6 +8,7 @@ import jwt
 from ..endpoints import AuthEndpoint
 from ..exceptions import JwksDiscoveryError
 from ._mixin import AuthMixin
+from .credentials import AsyncClientCredentials
 from .models import TokenResponse
 
 if TYPE_CHECKING:
@@ -49,21 +51,24 @@ class AsyncAuthResource(AuthMixin):
         # Validate (from Mixin)
         self._validate_client_credentials(client_id, client_secret)
 
-        # I/O operation (async)
-        response = await self._sdk_client._request(
-            "POST",
-            self._sdk_client._build_url(
-                self._sdk_client.auth_url, AuthEndpoint.CLIENT_TOKEN
-            ),
-            json=self._prepare_client_token_request(client_id, client_secret),
+        # One credential per client from now on: cached, one mint at a time,
+        # one replacement per 401, no mint for an hour after a 429.
+        credential = AsyncClientCredentials(
+            self._sdk_client.auth_url,
+            client_id,
+            client_secret,
+            http=self._sdk_client._client,
         )
-
-        # Parse and store (from Mixin)
-        return self._parse_and_store_token(
-            response.json(),
+        token = await credential.get_token()
+        self._sdk_client._credential = credential
+        self._sdk_client._store_token(
+            access_token=token.token,
+            expires_in=max(int(token.expires_on - time.monotonic()), 0),
             credentials={"client_id": client_id, "client_secret": client_secret},
             credentials_type="client",
         )
+        assert credential.last_response is not None
+        return credential.last_response
 
     async def login(self, email: str, password: str) -> TokenResponse:
         """Login with email and password to get JWT token.

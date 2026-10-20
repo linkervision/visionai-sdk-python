@@ -54,7 +54,7 @@ class VLMResource(VLMMixin):
         # I/O operation (sync)
         response = self._sdk_client._request(
             "POST",
-            self._sdk_client._build_url(self._sdk_client.vlm_url, VLMEndpoint.CHAT),
+            self._sdk_client._build_url(self._sdk_client._vlm_base(), VLMEndpoint.CHAT),
             headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
             json=body,
         )
@@ -87,7 +87,7 @@ class VLMResource(VLMMixin):
         response = self._sdk_client._request(
             "GET",
             self._sdk_client._build_url(
-                self._sdk_client.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"
+                self._sdk_client._vlm_base(), f"{VLMEndpoint.CHAT}/{result_id}"
             ),
             headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
         )
