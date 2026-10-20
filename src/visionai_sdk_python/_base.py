@@ -1,17 +1,14 @@
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 
 from ._jwt_verifier import JwtVerifier
 from .constants import resolve_allowed_issuers
-from .exceptions import (
-    APIError,
-    AuthenticationError,
-    ClientError,
-    PermissionDeniedError,
-    ServerError,
-)
+from .exceptions import raise_for_status
+
+if TYPE_CHECKING:
+    from .auth.credentials import AsyncClientCredentials, ClientCredentials
 
 
 class _BaseClient:
@@ -24,18 +21,20 @@ class _BaseClient:
     def __init__(
         self,
         auth_url: str,
-        vlm_url: str,
+        vlm_url: str | None = None,
         allowed_issuers: list[str] | None = None,
         verify_ssl: bool = True,
         timeout: float = 10.0,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
+        credential: "ClientCredentials | AsyncClientCredentials | None" = None,
     ) -> None:
         """Initialize the client with connection settings.
 
         Args:
             auth_url: Base URL for the authentication service.
-            vlm_url: Base URL for the VLM inference service.
+            vlm_url: Base URL for the VLM inference service. Optional for clients
+                that only authenticate; VLM calls then raise ``ValueError``.
             allowed_issuers: Optional list of allowed JWT issuers. If provided, tokens
                 whose ``iss`` claim is not in this list will be rejected. If omitted,
                 the issuers are derived from ``auth_url``.
@@ -43,13 +42,19 @@ class _BaseClient:
             timeout: Default request timeout in seconds.
             max_connections: Maximum number of concurrent connections in the pool.
             max_keepalive_connections: Maximum number of idle keep-alive connections.
+            credential: A ``ClientCredentials`` / ``AsyncClientCredentials`` whose
+                token every call uses; shareable between clients. Without it the
+                client keeps the token from ``auth.login()`` or ``set_token()``;
+                ``auth.get_access_token()`` installs a credential. The last explicit
+                authentication wins.
         """
         if not auth_url.strip():
             raise ValueError("auth_url must not be empty")
-        if not vlm_url.strip():
+        if vlm_url is not None and not vlm_url.strip():
             raise ValueError("vlm_url must not be empty")
         self.auth_url = auth_url.strip()
-        self.vlm_url = vlm_url.strip()
+        self.vlm_url = vlm_url.strip() if vlm_url is not None else None
+        self._credential = credential
         self.verify_ssl = verify_ssl
         self.timeout = timeout
         self.max_connections = max_connections
@@ -70,12 +75,17 @@ class _BaseClient:
         self._access_token: str | None = None
         self._token_expires_at: float | None = None  # monotonic time
         self._credentials: dict | None = None
-        self._credentials_type: Literal["login", "client"] | None = None
+        self._credentials_type: Literal["login"] | None = None
 
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    def _require_vlm_url(self) -> str:
+        if self.vlm_url is None:
+            raise ValueError("vlm_url is required for VLM calls; pass it to the client")
+        return self.vlm_url
 
     @staticmethod
     def _build_auth_header(access_token: str) -> dict[str, str]:
@@ -89,16 +99,20 @@ class _BaseClient:
         access_token: str,
         expires_in: int,
         credentials: dict | None = None,
-        credentials_type: Literal["login", "client"] | None = None,
+        credentials_type: Literal["login"] | None = None,
     ) -> None:
-        """Store token and credentials for auto-refresh.
+        """Use this token from now on; a credential set earlier is dropped.
+
+        The last explicit authentication wins, in both directions.
 
         Args:
             access_token: JWT access token.
             expires_in: Token expiration time in seconds.
             credentials: Optional credentials for auto-refresh.
-            credentials_type: Type of credentials ("login" or "client").
+            credentials_type: "login" for email / password credentials; client
+                credentials live in a ``ClientCredentials`` on the client instead.
         """
+        self._credential = None
         self._access_token = access_token
         self._token_expires_at = time.monotonic() + expires_in
         self._credentials = credentials
@@ -174,36 +188,5 @@ class _BaseClient:
 
     @staticmethod
     def _handle_response(response: httpx.Response) -> httpx.Response:
-        """Raise SDK-specific exceptions for non-2xx responses.
-
-        Raises:
-            AuthenticationError: If the server returns 401
-            PermissionDeniedError: If the server returns 403
-            ClientError: If the server returns any other 4xx
-            ServerError: If the server returns 5xx
-            APIError: If the server returns any other non-2xx status
-        """
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            body = None
-            if e.response.content:
-                try:
-                    body = e.response.json()
-                except Exception:
-                    pass
-            if isinstance(body, dict):
-                detail: str = body.get("detail") or body.get("message") or str(e)
-            else:
-                detail = str(e)
-            status = e.response.status_code
-            if status == 401:
-                raise AuthenticationError(detail) from e
-            if status == 403:
-                raise PermissionDeniedError(detail) from e
-            if 400 <= status < 500:
-                raise ClientError(status, detail) from e
-            if 500 <= status < 600:
-                raise ServerError(status, detail) from e
-            raise APIError(status, detail) from e
-        return response
+        """Raise the SDK exception for a non-2xx response (``exceptions.raise_for_status``)."""
+        return raise_for_status(response)

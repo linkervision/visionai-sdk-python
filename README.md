@@ -116,15 +116,30 @@ token = client.auth.login("user@example.com", "password")
 
 ### OAuth Client Credentials
 
+A `ClientCredentials` (or `AsyncClientCredentials`) holds the token for one Platform
+client: it is minted on first use, cached until shortly before it expires, and one
+instance can serve any number of clients and your own requests.
+
 ```python
-client = Client(auth_url="...", vlm_url="...")
-token = client.auth.get_access_token(
-    client_id="your-client-id",
-    client_secret="your-client-secret"
+from visionai_sdk_python import Client, ClientCredentials
+
+cred = ClientCredentials(
+    auth_url="...", client_id="your-client-id", client_secret="your-client-secret"
 )
+client = Client(auth_url="...", vlm_url="...", credential=cred)   # vlm.chat() uses it
+
+token = cred.get_token().token          # for requests the SDK does not make itself
 ```
 
-Tokens are stored internally and automatically refreshed before expiration.
+A mint is a Platform round trip and, on sites that cap client tokens, a scarce one:
+concurrent callers share one mint, a refresh that fails keeps the current token while
+Platform still accepts it, and after a 429 no mint is tried for an hour
+(`RateLimitedError`). `get_token(force_refresh=True)` mints on demand.
+
+`client.auth.get_access_token(client_id, client_secret)` still works and now builds a
+`ClientCredentials` underneath; it returns the cached token unless `force_refresh=True`.
+A later `login()` or `set_token()` replaces the credential: the last explicit
+authentication wins. `vlm_url` is optional for clients that only authenticate.
 
 ## VLM Inference
 

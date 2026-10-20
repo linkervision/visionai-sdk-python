@@ -97,7 +97,7 @@ class AuthMixin:
         Args:
             response_data: Response JSON data
             credentials: Credentials dict for auto-refresh
-            credentials_type: Type of credentials ("login" or "client")
+            credentials_type: Type of credentials ("login")
 
         Returns:
             Parsed TokenResponse
