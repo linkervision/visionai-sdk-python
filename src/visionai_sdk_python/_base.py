@@ -85,10 +85,28 @@ class _BaseClient:
         self._credentials: dict | None = None
         self._credentials_type: Literal["login", "client"] | None = None
 
+    @property
+    def credential(self) -> "ClientCredentials | AsyncClientCredentials | None":
+        """The credential this client was built with, for callers that need the
+        raw token themselves (a WebSocket upgrade, another HTTP library)."""
+        return self._credential
+
     @staticmethod
     def _build_url(base_url: str, path: str) -> str:
         """Join a base URL and a path, normalizing slashes."""
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+    def _absolute(self, url: str) -> str:
+        """``url`` as given when absolute, else a path under ``auth_url``."""
+        return url if "://" in url else self._build_url(self.auth_url, url)
+
+    def _with_auth(self, kwargs: dict, token: str) -> dict:
+        """``kwargs`` for httpx with the bearer header; the client's token wins."""
+        headers = {
+            **dict(kwargs.get("headers") or {}),
+            **self._build_auth_header(token),
+        }
+        return {**kwargs, "headers": headers}
 
     def _vlm_base(self) -> str:
         if self.vlm_url is None:

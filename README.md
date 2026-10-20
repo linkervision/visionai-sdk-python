@@ -128,7 +128,10 @@ cred = ClientCredentials(
 )
 client = Client(auth_url="...", vlm_url="...", credential=cred)   # vlm.chat() uses it
 
-token = cred.get_token().token          # for requests the SDK does not make itself
+token = cred.get_token().token          # for a WebSocket upgrade or another library
+
+# Any other HTTP call with the same token; a 401 gets one fresh token and one retry
+nodes = client.request("GET", "https://vs.example.com/mgmt/nodes").json()
 ```
 
 Platform mints at most 50 tokens per client per month, so the credential protects the

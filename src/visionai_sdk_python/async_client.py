@@ -19,7 +19,10 @@ class AsyncClient(_BaseClient):
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
         credential: AsyncClientCredentials | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        """See ``_BaseClient``; ``http_client`` is an httpx.AsyncClient to send through
+        (tests, shared pools); the client closes only the one it created."""
         super().__init__(
             auth_url=auth_url,
             vlm_url=vlm_url,
@@ -30,7 +33,7 @@ class AsyncClient(_BaseClient):
             max_keepalive_connections=max_keepalive_connections,
             credential=credential,
         )
-        self._client = httpx.AsyncClient(
+        self._client = http_client or httpx.AsyncClient(
             verify=self.verify_ssl,
             timeout=self.timeout,
             limits=httpx.Limits(
@@ -38,6 +41,7 @@ class AsyncClient(_BaseClient):
                 max_keepalive_connections=self.max_keepalive_connections,
             ),
         )
+        self._owns_http = http_client is None
         # Register the different function resource
         self.auth = AsyncAuthResource(self)
         self.vlm = AsyncVLMResource(self)
@@ -51,9 +55,46 @@ class AsyncClient(_BaseClient):
             raise self._map_transport_error(e) from e
         return self._handle_response(response)
 
+    async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Send any request with this client's bearer token.
+
+        ``url`` is absolute, or a path under ``auth_url``; ``kwargs`` go to httpx.
+        A 401 buys one fresh token (from ``credential`` or the stored login) and
+        one retry, so a token revoked server-side costs one extra request.
+
+        Raises:
+            AuthenticationError: No token, or the fresh one was refused too.
+            RateLimitedError, NetworkError, ServerError, ClientError: As the
+                resource methods.
+        """
+        url = self._absolute(url)
+        await self._ensure_token()
+        token = self._access_token
+        try:
+            return await self._request(method, url, **self._with_auth(kwargs, token))
+        except AuthenticationError:
+            if not await self._renew_rejected(token):
+                raise
+        return await self._request(
+            method, url, **self._with_auth(kwargs, self._access_token)
+        )
+
+    async def _renew_rejected(self, token: str) -> bool:
+        """A 401 for ``token``: get a different one, once; False when none would help."""
+        if self._credential is not None:
+            if not self._credential.invalidate(token):
+                return False
+            self._access_token = (await self._credential.get_token()).token
+            return True
+        if self._credentials is None or self._access_token != token:
+            return False
+        await self._refresh_token()
+        return self._access_token != token
+
     async def close(self) -> None:
-        """Close the HTTP client and release connections."""
-        await self._client.aclose()
+        """Close the HTTP client this client created and release its connections."""
+        if self._owns_http:
+            await self._client.aclose()
 
     async def __aenter__(self) -> "AsyncClient":
         """Async context manager entry."""
