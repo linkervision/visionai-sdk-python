@@ -27,7 +27,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: pyproject.toml
+          # requires-python is open-ended, so a version file would float to the newest
+          # interpreter; pin the one the compiled dependencies ship wheels for.
+          python-version: "3.14"
 
       - name: Install locked dependencies
         run: uv sync --locked --all-extras
