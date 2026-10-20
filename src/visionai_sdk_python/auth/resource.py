@@ -49,16 +49,22 @@ class AuthResource(AuthMixin):
         # Validate (from Mixin)
         self._validate_client_credentials(client_id, client_secret)
 
-        # One credential per client from now on: cached, one mint at a time,
-        # one replacement per 401, no mint for an hour after a 429.
-        credential = ClientCredentials(
-            self._sdk_client.auth_url,
-            client_id,
-            client_secret,
-            http=self._sdk_client._client,
-        )
+        # One credential per client: cached, one mint at a time, one replacement
+        # per 401, no mint for an hour after a 429. Calling this again with the
+        # same client credentials reuses it, so it does not mint again.
+        credential = self._sdk_client._credential
+        if not (
+            isinstance(credential, ClientCredentials)
+            and credential.is_for(client_id, client_secret)
+        ):
+            credential = ClientCredentials(
+                self._sdk_client.auth_url,
+                client_id,
+                client_secret,
+                http=self._sdk_client._client,
+            )
+            self._sdk_client._credential = credential
         token = credential.get_token()
-        self._sdk_client._credential = credential
         self._sdk_client._store_token(
             access_token=token.token,
             expires_in=max(int(token.expires_on - time.monotonic()), 0),

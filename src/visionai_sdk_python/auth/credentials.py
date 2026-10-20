@@ -8,6 +8,7 @@ replacement, and a 429 stops minting for an hour.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import threading
 import time
@@ -62,6 +63,12 @@ class _Credentials:
         # True while the cached token is the replacement a 401 bought.
         self._replaced = False
         self._blocked_until = 0.0
+
+    def is_for(self, client_id: str, client_secret: str) -> bool:
+        """True when this credential was built for exactly these client credentials."""
+        return self.client_id == client_id.strip() and hmac.compare_digest(
+            self._client_secret, client_secret
+        )
 
     def _cached(self) -> AccessToken | None:
         if self._token and _now() < self._token.expires_on - REFRESH_BUFFER_S:

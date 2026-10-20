@@ -265,6 +265,24 @@ async def test_get_access_token_keeps_its_result_and_refreshes_through_a_credent
     assert client._access_token == "tok-2"
 
 
+async def test_repeated_get_access_token_reuses_the_credential(platform, clock):
+    client = AsyncClient(AUTH_URL, VLM_URL)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(platform.handler))
+
+    for _ in range(5):
+        assert (
+            await client.auth.get_access_token("cid", "secret")
+        ).access_token == "tok-1"
+    assert platform.minted == 1
+
+    # Other client credentials: a new credential, one mint.
+    assert (
+        await client.auth.get_access_token("other", "secret")
+    ).access_token == "tok-2"
+    assert (await client.auth.get_access_token("cid", "secret")).access_token == "tok-3"
+    assert platform.minted == 3
+
+
 def test_sync_get_access_token_keeps_its_result(platform, clock):
     client = Client(AUTH_URL, VLM_URL)
     client._client = httpx.Client(transport=httpx.MockTransport(platform.handler))
