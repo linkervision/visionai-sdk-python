@@ -35,6 +35,11 @@ class AsyncAuthResource(AuthMixin):
 
         The token is stored internally and will be used automatically for subsequent
         API calls. If the token expires, it will be automatically refreshed.
+        Calling this again with the same credentials returns the cached token.
+
+        New code should build a ``ClientCredentials`` / ``AsyncClientCredentials``
+        and pass it as ``credential=`` to the client instead; this method stays for
+        existing callers.
 
         Args:
             client_id: OAuth client ID
