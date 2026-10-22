@@ -20,6 +20,12 @@ class AsyncClient(_BaseClient):
         max_keepalive_connections: int = 20,
         credential: AsyncClientCredentials | None = None,
     ) -> None:
+        if credential is not None and not isinstance(
+            credential, AsyncClientCredentials
+        ):
+            raise TypeError(
+                "AsyncClient takes an AsyncClientCredentials; Client takes a ClientCredentials"
+            )
         super().__init__(
             auth_url=auth_url,
             vlm_url=vlm_url,

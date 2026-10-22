@@ -20,6 +20,10 @@ class Client(_BaseClient):
         max_keepalive_connections: int = 20,
         credential: ClientCredentials | None = None,
     ) -> None:
+        if credential is not None and not isinstance(credential, ClientCredentials):
+            raise TypeError(
+                "Client takes a ClientCredentials; AsyncClient takes an AsyncClientCredentials"
+            )
         super().__init__(
             auth_url=auth_url,
             vlm_url=vlm_url,
@@ -86,7 +90,7 @@ class Client(_BaseClient):
             AuthenticationError: If no token is available or token expired without credentials.
         """
         if self._credential is not None:
-            return (self._credential.get_token()).token
+            return self._credential.get_token().token
         if self._access_token is None:
             raise AuthenticationError(
                 "Not authenticated. Call login() or get_access_token() first."
