@@ -5,6 +5,7 @@ import json
 import pytest
 
 from visionai_sdk_python.relay import (
+    MAX_MESSAGE_CHARS,
     Error,
     Heartbeat,
     InvalidFrame,
@@ -173,3 +174,20 @@ def test_workspace_id_format(value, ok):
 def test_every_shipped_example_is_valid_json_with_a_type():
     for name in NAMES:
         assert isinstance(json.loads(example(name))["type"], str), name
+
+
+def test_an_error_message_is_cut_so_it_fits_a_frame():
+    with pytest.raises(InvalidFrame) as exc:
+        parse_agent_frame(json.dumps({"type": "x" * 1_000_000}))
+
+    assert len(str(exc.value)) == MAX_MESSAGE_CHARS
+    assert str(exc.value).endswith("…")
+
+
+def test_an_oversized_request_id_is_dropped_from_the_error():
+    frame = {"type": "request", "request_id": "r" * 1_000_000}
+    with pytest.raises(InvalidFrame) as exc:
+        parse_relay_frame(json.dumps(frame))
+
+    assert exc.value.request_id is None
+    assert str(exc.value).endswith("(request_id too long, dropped)")
