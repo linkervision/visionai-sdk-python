@@ -3,7 +3,8 @@ import httpx
 from ._base import _BaseClient
 from ._request_attribution import merge_request_attribution
 from .auth.async_resource import AsyncAuthResource
-from .exceptions import AuthenticationError, NetworkError, VisionaiSDKError
+from .auth.credentials import AsyncClientCredentials
+from .exceptions import AuthenticationError, from_transport_error
 from .vlm.async_resource import AsyncVLMResource
 
 
@@ -11,13 +12,20 @@ class AsyncClient(_BaseClient):
     def __init__(
         self,
         auth_url: str,
-        vlm_url: str,
+        vlm_url: str | None = None,
         allowed_issuers: list[str] | None = None,
         verify_ssl: bool = True,
         timeout: float = 10.0,
         max_connections: int = 100,
         max_keepalive_connections: int = 20,
+        credential: AsyncClientCredentials | None = None,
     ) -> None:
+        if credential is not None and not isinstance(
+            credential, AsyncClientCredentials
+        ):
+            raise TypeError(
+                "AsyncClient takes an AsyncClientCredentials; Client takes a ClientCredentials"
+            )
         super().__init__(
             auth_url=auth_url,
             vlm_url=vlm_url,
@@ -26,6 +34,7 @@ class AsyncClient(_BaseClient):
             timeout=timeout,
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
+            credential=credential,
         )
         self._client = httpx.AsyncClient(
             verify=self.verify_ssl,
@@ -44,12 +53,8 @@ class AsyncClient(_BaseClient):
         merge_request_attribution(kwargs)
         try:
             response = await self._client.request(method, url, **kwargs)
-        except httpx.TimeoutException as e:
-            raise NetworkError("Request timed out") from e
-        except httpx.NetworkError as e:
-            raise NetworkError(f"Network error: {e}") from e
         except httpx.RequestError as e:
-            raise VisionaiSDKError(f"Request failed: {e}") from e
+            raise from_transport_error(e) from e
         return self._handle_response(response)
 
     async def close(self) -> None:
@@ -65,7 +70,9 @@ class AsyncClient(_BaseClient):
         await self.close()
 
     async def _refresh_token(self) -> None:
-        """Refresh token using stored credentials.
+        """Refresh the token with the stored login credentials.
+
+        Client credentials refresh through the credential object instead.
 
         Raises:
             AuthenticationError: If no credentials are stored or refresh fails.
@@ -73,23 +80,19 @@ class AsyncClient(_BaseClient):
         if self._credentials is None or self._credentials_type is None:
             raise AuthenticationError("No credentials available for token refresh")
 
-        if self._credentials_type == "login":
-            await self.auth.login(
-                email=self._credentials["email"],
-                password=self._credentials["password"],
-            )
-        elif self._credentials_type == "client":
-            await self.auth.get_access_token(
-                client_id=self._credentials["client_id"],
-                client_secret=self._credentials["client_secret"],
-            )
+        await self.auth.login(
+            email=self._credentials["email"],
+            password=self._credentials["password"],
+        )
 
-    async def _ensure_token(self) -> None:
-        """Ensure a valid token is available, refreshing if necessary.
+    async def _ensure_token(self) -> str:
+        """The token to send: the credential's, else the stored one, refreshed if expiring.
 
         Raises:
             AuthenticationError: If no token is available or token expired without credentials.
         """
+        if self._credential is not None:
+            return (await self._credential.get_token()).token
         if self._access_token is None:
             raise AuthenticationError(
                 "Not authenticated. Call login() or get_access_token() first."
@@ -101,3 +104,4 @@ class AsyncClient(_BaseClient):
                     "Token expired and no credentials available for refresh"
                 )
             await self._refresh_token()
+        return self._access_token
