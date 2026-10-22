@@ -28,6 +28,8 @@ MAX_BODY_BYTES = 15 * 1024 * 1024
 # Timeouts nest: the agent waits for VS, the relay waits a little longer for the agent.
 AGENT_TIMEOUT_S = 100
 RELAY_TIMEOUT_S = 110.0
+# An `error` echoes parts of the peer's frame; cut them so the error fits a frame.
+MAX_MESSAGE_CHARS = 200
 
 # Platform workspace ids: lowercase hyphenated UUIDs.
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -133,9 +135,18 @@ _relay_frame = TypeAdapter(Annotated[RelayFrame, Field(discriminator="type")])
 
 
 class InvalidFrame(ValueError):
-    """A frame the receiver cannot read; the text is safe to send back in an ``error``."""
+    """A frame the receiver cannot read; the text is safe to send back in an ``error``.
+
+    Parts of the text come from the peer's frame, so it is cut at ``MAX_MESSAGE_CHARS``
+    and a ``request_id`` longer than that is dropped.
+    """
 
     def __init__(self, message: str, request_id: str | None = None) -> None:
+        if len(message) > MAX_MESSAGE_CHARS:
+            message = message[: MAX_MESSAGE_CHARS - 1] + "…"
+        if request_id is not None and len(request_id) > MAX_MESSAGE_CHARS:
+            request_id = None
+            message += " (request_id too long, dropped)"
         super().__init__(message)
         self.request_id = request_id
 
