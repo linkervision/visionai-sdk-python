@@ -207,7 +207,8 @@ class AsyncClientCredentials(_Credentials):
 
     Pass it to ``AsyncClient(credential=...)`` and use ``await get_token()`` for
     requests the SDK does not make itself, such as a WebSocket upgrade. One
-    instance serves any number of clients and callers.
+    instance serves any number of clients and callers on one event loop; its
+    lock and ``httpx.AsyncClient`` bind to that loop.
     """
 
     def __init__(
