@@ -58,7 +58,11 @@ class Client(_BaseClient):
     def request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """Send any request with this client's bearer token.
 
-        ``url`` is a full URL (the client has two bases); ``kwargs`` go to httpx.
+        ``url`` is a full URL (the client has two bases); ``kwargs`` go to httpx. The
+        bearer token goes to whatever host ``url`` names, so ``url`` must come from
+        configuration or code, never from a caller's input; redirects are not
+        followed unless asked, and httpx drops the header on a cross-origin redirect.
+
         With a ``credential``, a 401 buys one retry with the credential's current
         token, which it replaces when the rejected one is old enough to have been
         revoked (``REPLACE_COOLDOWN_S``); a 401 on the retry raises. Without a
