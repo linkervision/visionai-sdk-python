@@ -11,6 +11,29 @@ if TYPE_CHECKING:
     from .auth.credentials import AsyncClientCredentials, ClientCredentials
 
 
+_TRANSPORT_DEFAULTS = {
+    "verify_ssl": True,
+    "timeout": 10.0,
+    "max_connections": 100,
+    "max_keepalive_connections": 20,
+}
+
+
+def _transport_settings(injected: object | None, **given: object) -> dict:
+    """The settings for the httpx client the SDK builds, or an error with an injected one.
+
+    An injected client brings its own TLS, timeout and limits, so none of these
+    may be given with it: silently ignoring ``verify_ssl=False`` would surprise.
+    """
+    passed = {name: value for name, value in given.items() if value is not None}
+    if injected is not None and passed:
+        raise ValueError(
+            "the injected http client has its own verify, timeout and limits; "
+            f"do not pass {', '.join(passed)} with it"
+        )
+    return {**_TRANSPORT_DEFAULTS, **passed}
+
+
 class _BaseClient:
     """Base class for VisionAI SDK clients.
 

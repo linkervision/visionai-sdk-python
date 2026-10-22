@@ -135,6 +135,13 @@ token = cred.get_token().token          # for a WebSocket upgrade or another lib
 nodes = client.request("GET", "https://vs.example.com/mgmt/nodes").json()
 ```
 
+`request()` raises on a non-2xx like the resource methods (`AuthenticationError`,
+`ClientError`, `ServerError`, ...), unlike plain httpx, and sends the token to whatever
+host `url` names, so `url` comes from configuration or code, never from a caller. A
+client built with `http_client=` (or a credential with `http=`) uses that client's TLS,
+timeout and limits; passing `verify_ssl` / `timeout` / `max_connections` /
+`max_keepalive_connections` with it raises `ValueError`.
+
 A mint is a Platform round trip and, on sites that cap client tokens, a scarce one:
 concurrent callers share one mint, a refresh that fails keeps the current token while
 Platform still accepts it, a 401 on a token minted more than 30 minutes ago buys a

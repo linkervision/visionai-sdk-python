@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 
-from .._base import _BaseClient
+from .._base import _BaseClient, _transport_settings
 from .._request_attribution import merge_request_attribution
 from ..endpoints import AuthEndpoint
 from ..exceptions import (
@@ -198,11 +198,16 @@ class ClientCredentials(_Credentials):
         client_secret: str,
         *,
         http: httpx.Client | None = None,
-        verify_ssl: bool = True,
-        timeout: float = 10.0,
+        verify_ssl: bool | None = None,
+        timeout: float | None = None,
     ) -> None:
         super().__init__(auth_url, client_id, client_secret)
-        self._http = http or httpx.Client(verify=verify_ssl, timeout=timeout)
+        own = _transport_settings(http, verify_ssl=verify_ssl, timeout=timeout)
+        self._http = (
+            http
+            if http is not None
+            else httpx.Client(verify=own["verify_ssl"], timeout=own["timeout"])
+        )
         self._http_owner = http is None  # a client we built is ours to close
         self._lock = threading.Lock()
 
@@ -280,11 +285,16 @@ class AsyncClientCredentials(_Credentials):
         client_secret: str,
         *,
         http: httpx.AsyncClient | None = None,
-        verify_ssl: bool = True,
-        timeout: float = 10.0,
+        verify_ssl: bool | None = None,
+        timeout: float | None = None,
     ) -> None:
         super().__init__(auth_url, client_id, client_secret)
-        self._http = http or httpx.AsyncClient(verify=verify_ssl, timeout=timeout)
+        own = _transport_settings(http, verify_ssl=verify_ssl, timeout=timeout)
+        self._http = (
+            http
+            if http is not None
+            else httpx.AsyncClient(verify=own["verify_ssl"], timeout=own["timeout"])
+        )
         self._http_owner = http is None  # a client we built is ours to close
         self._lock = asyncio.Lock()
 

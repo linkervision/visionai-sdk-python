@@ -1,6 +1,6 @@
 import httpx
 
-from ._base import _BaseClient
+from ._base import _BaseClient, _transport_settings
 from ._request_attribution import merge_request_attribution
 from .auth.async_resource import AsyncAuthResource
 from .auth.credentials import AsyncClientCredentials
@@ -14,38 +14,49 @@ class AsyncClient(_BaseClient):
         auth_url: str,
         vlm_url: str | None = None,
         allowed_issuers: list[str] | None = None,
-        verify_ssl: bool = True,
-        timeout: float = 10.0,
-        max_connections: int = 100,
-        max_keepalive_connections: int = 20,
+        verify_ssl: bool | None = None,
+        timeout: float | None = None,
+        max_connections: int | None = None,
+        max_keepalive_connections: int | None = None,
         credential: AsyncClientCredentials | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        """See ``_BaseClient``; ``http_client`` is an httpx.AsyncClient to send through
-        (tests, shared pools); the client closes only the one it created."""
+        """See ``_BaseClient``. ``http_client`` is an httpx.AsyncClient to send through
+        (tests, shared pools): its own TLS, timeout and limits apply, so
+        ``verify_ssl`` / ``timeout`` / ``max_connections`` /
+        ``max_keepalive_connections`` cannot be given with it (``ValueError``);
+        the client closes only the one it created."""
         if credential is not None and not isinstance(
             credential, AsyncClientCredentials
         ):
             raise TypeError(
                 "AsyncClient takes an AsyncClientCredentials; Client takes a ClientCredentials"
             )
-        super().__init__(
-            auth_url=auth_url,
-            vlm_url=vlm_url,
-            allowed_issuers=allowed_issuers,
+        settings = _transport_settings(
+            http_client,
             verify_ssl=verify_ssl,
             timeout=timeout,
             max_connections=max_connections,
             max_keepalive_connections=max_keepalive_connections,
-            credential=credential,
         )
-        self._client = http_client or httpx.AsyncClient(
-            verify=self.verify_ssl,
-            timeout=self.timeout,
-            limits=httpx.Limits(
-                max_connections=self.max_connections,
-                max_keepalive_connections=self.max_keepalive_connections,
-            ),
+        super().__init__(
+            auth_url=auth_url,
+            vlm_url=vlm_url,
+            allowed_issuers=allowed_issuers,
+            credential=credential,
+            **settings,
+        )
+        self._client = (
+            http_client
+            if http_client is not None
+            else httpx.AsyncClient(
+                verify=self.verify_ssl,
+                timeout=self.timeout,
+                limits=httpx.Limits(
+                    max_connections=self.max_connections,
+                    max_keepalive_connections=self.max_keepalive_connections,
+                ),
+            )
         )
         self._http_owner = http_client is None  # a client we built is ours to close
         # Register the different function resource
