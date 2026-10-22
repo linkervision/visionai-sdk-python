@@ -72,6 +72,7 @@ jobs:
         run: >-
           uv pip install
           "httpx==0.28.1"
+          "httpx2==2.13.*"
           "requests==2.31.*"
           "aiohttp==3.9.*"
           "wrapt==1.16.*"
@@ -81,6 +82,7 @@ jobs:
         run: >-
           uv pip install --upgrade
           "httpx>=0.28.1"
+          "httpx2>=2.13,<3"
           "requests>=2.31,<3"
           "aiohttp>=3.9,<4"
           "wrapt>=1.16,<3"

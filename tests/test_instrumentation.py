@@ -16,6 +16,7 @@ import warnings
 
 import aiohttp
 import httpx
+import httpx2
 import pytest
 import requests
 
@@ -109,6 +110,12 @@ def instrumented(monkeypatch):
     instrumentation.uninstrument()
 
 
+@pytest.fixture(params=[httpx, httpx2], ids=lambda m: m.__name__)
+def httpx_lib(request):
+    """httpx and its fork httpx2 (separate classes, same dispatch internals)."""
+    return request.param
+
+
 class TestRequests:
     def test_session_carries_header(self, url, instrumented):
         assert requests.Session().get(url).text == "stream-agent"
@@ -152,27 +159,27 @@ class TestRequests:
 
 
 class TestHttpx:
-    def test_client_carries_header(self, url, instrumented):
-        with httpx.Client() as client:
+    def test_client_carries_header(self, httpx_lib, url, instrumented):
+        with httpx_lib.Client() as client:
             assert client.get(url).text == "stream-agent"
 
-    def test_module_level_one_shot_carries_header(self, url, instrumented):
-        assert httpx.get(url).text == "stream-agent"
+    def test_module_level_one_shot_carries_header(self, httpx_lib, url, instrumented):
+        assert httpx_lib.get(url).text == "stream-agent"
 
-    def test_send_prebuilt_request_carries_header(self, url, instrumented):
-        with httpx.Client() as client:
+    def test_send_prebuilt_request_carries_header(self, httpx_lib, url, instrumented):
+        with httpx_lib.Client() as client:
             response = client.send(client.build_request("GET", url))
 
         assert response.text == "stream-agent"
 
-    async def test_async_client_carries_header(self, url, instrumented):
-        async with httpx.AsyncClient() as client:
+    async def test_async_client_carries_header(self, httpx_lib, url, instrumented):
+        async with httpx_lib.AsyncClient() as client:
             response = await client.get(url)
 
         assert response.text == "stream-agent"
 
-    def test_real_class_is_not_replaced(self, instrumented):
-        assert httpx.Client.__mro__[0] is httpx.Client
+    def test_real_class_is_not_replaced(self, httpx_lib, instrumented):
+        assert httpx_lib.Client.__mro__[0] is httpx_lib.Client
 
 
 class TestAiohttp:
@@ -695,26 +702,28 @@ class TestRedirectReChecksDestinationPerHop:
         assert response.text == MISSING
 
     def test_httpx_allowed_to_disallowed_strips_the_header(
-        self, url, url_localhost, instrumented
+        self, httpx_lib, url, url_localhost, instrumented
     ):
-        with httpx.Client(follow_redirects=True) as client:
+        with httpx_lib.Client(follow_redirects=True) as client:
             response = client.get(_redirect(url, url_localhost))
         assert response.text == MISSING
 
-    def test_httpx_allowed_to_allowed_keeps_the_header(self, url, instrumented):
-        with httpx.Client(follow_redirects=True) as client:
+    def test_httpx_allowed_to_allowed_keeps_the_header(
+        self, httpx_lib, url, instrumented
+    ):
+        with httpx_lib.Client(follow_redirects=True) as client:
             response = client.get(_redirect(url, url))
         assert response.text == "stream-agent"
 
     def test_httpx_third_hop_does_not_leak_the_header(
-        self, url, url_localhost, instrumented
+        self, httpx_lib, url, url_localhost, instrumented
     ):
         """httpx doesn't share requests' bug: _build_redirect_request derives
         each hop's headers from the current (already-mutated-by-us) request,
         not from an independent copy chain, so this already passed before
         the requests-specific fix above -- kept as regression coverage."""
         chain = _redirect(url, _redirect(url_localhost, url_localhost))
-        with httpx.Client(follow_redirects=True) as client:
+        with httpx_lib.Client(follow_redirects=True) as client:
             response = client.get(chain)
         assert response.text == MISSING
 

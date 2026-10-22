@@ -25,6 +25,7 @@ Attributing direct `requests`/`aiohttp` calls, or using `instrumentation.instrum
 ```bash
 pip install visionai-sdk-python[requests]
 pip install visionai-sdk-python[aiohttp]
+pip install visionai-sdk-python[httpx2]
 pip install visionai-sdk-python[instrumentation]   # needed for instrument() itself
 ```
 
@@ -365,7 +366,10 @@ instrumentation.instrument(
 ```
 
 This wraps a request-dispatch method of `requests.Session`, `httpx.Client`/
-`AsyncClient` and `aiohttp.ClientSession` in place, so it also covers calls made
+`AsyncClient`, `httpx2.Client`/`AsyncClient` (the httpx fork Starlette prefers
+from 1.2.0 on, see
+[Kludex/starlette#3291](https://github.com/Kludex/starlette/pull/3291)) and
+`aiohttp.ClientSession` in place, so it also covers calls made
 by third-party packages you cannot edit, module-level one-shots like
 `requests.get()`, and requests sent through a client instance that already
 existed before `instrument()` ran (see "Call it any time" below).
@@ -377,6 +381,7 @@ it patches are separately optional, and whichever is not installed is skipped:
 pip install visionai-sdk-python[instrumentation]
 pip install visionai-sdk-python[requests]   # httpx is already a core dependency
 pip install visionai-sdk-python[aiohttp]
+pip install visionai-sdk-python[httpx2]
 ```
 
 ### Destination scoping

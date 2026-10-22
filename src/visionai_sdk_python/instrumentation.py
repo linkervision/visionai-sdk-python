@@ -8,8 +8,8 @@ should receive the header::
         allowed_destination_hosts=["vlm-inference-server", "*.svc.cluster.local"],
     )
 
-Every request through ``requests``, ``httpx`` (sync and async) and ``aiohttp``
-then carries ``X-Request-Source`` -- including third-party code, module-level
+Every request through ``requests``, ``httpx``/``httpx2`` (sync and async) and
+``aiohttp`` then carries ``X-Request-Source`` -- including third-party code, module-level
 one-shots (``requests.get()``), and clients built before ``instrument()`` ran,
 since injection patches a request-dispatch method on the class rather than
 ``__init__``.
@@ -387,12 +387,20 @@ async def _inject_httpx_send_async(
     return await wrapped(*args, **kwargs)
 
 
-# (module, attribute path, wrapper). Missing modules are skipped: requests and
-# aiohttp are optional extras, httpx is a core dependency.
+# (module, attribute path, wrapper). Missing modules are skipped: requests,
+# aiohttp and httpx2 are optional extras, httpx is a core dependency. httpx2 is
+# the fork Starlette's TestClient prefers from 1.2.0 on, deprecating httpx
+# (https://github.com/Kludex/starlette/pull/3291) -- a separate class
+# hierarchy under its own import name (not a subclass of httpx's), so it needs
+# its own targets, but its redirect loop and _build_redirect_request
+# (extensions passed by reference) match httpx's, so the same wrappers apply
+# unchanged.
 _TARGETS = (
     ("requests", "Session.send", _inject_requests_send),
     ("httpx", "Client._send_single_request", _inject_httpx_send),
     ("httpx", "AsyncClient._send_single_request", _inject_httpx_send_async),
+    ("httpx2", "Client._send_single_request", _inject_httpx_send),
+    ("httpx2", "AsyncClient._send_single_request", _inject_httpx_send_async),
     ("aiohttp", "ClientRequest.__init__", _inject_aiohttp_request),
 )
 
