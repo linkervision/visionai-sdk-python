@@ -130,7 +130,7 @@ Tokens are stored internally and automatically refreshed before expiration.
 
 `visionai_sdk_python.relay` holds the wire format between platform-relay and
 platform-edge-agent: the frame models, the constants and `parse_agent_frame()` /
-`parse_relay_frame()` / `dump_frame()`. The spec is platform-service's
+`parse_relay_frame()` / `dump_frame()` (which refuses a frame over `MAX_FRAME_BYTES`). The spec is platform-service's
 `docs/adr/0001-relay-protocol.md`; both sides import this module instead of keeping a
 copy. The ADR's JSON examples ship with it (`visionai_sdk_python.relay.examples`:
 `example(name)` / `example_text(name)`), so every implementation tests against the same

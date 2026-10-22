@@ -5,8 +5,10 @@ import json
 import pytest
 
 from visionai_sdk_python.relay import (
+    MAX_FRAME_BYTES,
     MAX_MESSAGE_CHARS,
     Error,
+    FrameTooLarge,
     Heartbeat,
     InvalidFrame,
     Register,
@@ -191,3 +193,13 @@ def test_an_oversized_request_id_is_dropped_from_the_error():
 
     assert exc.value.request_id is None
     assert str(exc.value).endswith("(request_id too long, dropped)")
+
+
+def test_dump_frame_refuses_a_frame_the_receiver_would_close_on():
+    frame = Response(request_id="r1", status=200, body="x" * MAX_FRAME_BYTES)
+
+    with pytest.raises(FrameTooLarge) as exc:
+        dump_frame(frame)
+
+    assert exc.value.size > MAX_FRAME_BYTES
+    assert dump_frame(Response(request_id="r1", status=200, body="x"))

@@ -60,6 +60,7 @@ class ErrorCode(StrEnum):
     PATH_NOT_ALLOWED = "path_not_allowed"
     UPSTREAM_UNREACHABLE = "upstream_unreachable"
     UPSTREAM_TIMEOUT = "upstream_timeout"
+    UPSTREAM_TOO_LARGE = "upstream_too_large"
 
 
 class Frame(BaseModel):
@@ -151,6 +152,14 @@ class InvalidFrame(ValueError):
         self.request_id = request_id
 
 
+class FrameTooLarge(ValueError):
+    """The encoded frame exceeds ``MAX_FRAME_BYTES``; the receiver would close with 1009."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__(f"frame is {size} bytes; the limit is {MAX_FRAME_BYTES}")
+        self.size = size
+
+
 def parse_agent_frame(text: str) -> AgentFrame:
     """A frame the relay received from an agent."""
     return _parse(text, _agent_frame)
@@ -186,4 +195,9 @@ def _parse(text: str, adapter: TypeAdapter):
 
 
 def dump_frame(frame: BaseModel) -> str:
-    return frame.model_dump_json(exclude_none=True)
+    """The frame as JSON text, or ``FrameTooLarge`` when a receiver would refuse it."""
+    text = frame.model_dump_json(exclude_none=True)
+    size = len(text.encode())
+    if size > MAX_FRAME_BYTES:
+        raise FrameTooLarge(size)
+    return text
