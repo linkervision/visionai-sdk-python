@@ -98,7 +98,7 @@ class Client(_BaseClient):
             if self._credential is None or not self._resendable(kwargs):
                 raise
             self._credential.invalidate(token)
-            replacement = (self._credential.get_token()).token
+            replacement = self._credential.get_token().token
             if replacement == token:
                 raise
         return self._request(method, url, **self._with_auth(kwargs, replacement))
