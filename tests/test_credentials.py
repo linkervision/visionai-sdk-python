@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 import httpx
 import pytest
@@ -443,3 +444,41 @@ async def test_a_401_reported_during_a_refresh_leaves_the_refresh_alone(
     clock[0] += REPLACE_COOLDOWN_S + 1
     assert cred.invalidate("tok-2") is True
     assert platform.minted == 2
+
+
+def test_sync_invalidate_waits_for_a_mint_in_another_thread():
+    """Without the lock the report would drop the token the other thread just minted."""
+    entered, release = threading.Event(), threading.Event()
+    tokens = iter(["old", "new"])
+
+    def platform(request: httpx.Request) -> httpx.Response:
+        token = next(tokens)
+        if token == "new":
+            entered.set()
+            release.wait(5)
+        return httpx.Response(
+            200,
+            json={"access_token": token, "expires_in": 3600, "token_type": "Bearer"},
+        )
+
+    cred = ClientCredentials(
+        "http://platform.test",
+        "cid",
+        "secret",
+        http=httpx.Client(transport=httpx.MockTransport(platform)),
+    )
+    old = cred.get_token().token
+    minter = threading.Thread(target=cred.get_token, kwargs={"force_refresh": True})
+    minter.start()
+    assert entered.wait(5)
+    result: list[bool] = []
+    reporter = threading.Thread(target=lambda: result.append(cred.invalidate(old)))
+    reporter.start()
+    reporter.join(0.2)
+
+    assert reporter.is_alive()  # blocked behind the mint, not racing it
+    release.set()
+    minter.join(5)
+    reporter.join(5)
+    assert result == [False]
+    assert cred.get_token().token == "new"

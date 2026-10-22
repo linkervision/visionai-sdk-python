@@ -158,8 +158,8 @@ class _Credentials:
         )
         return valid
 
-    def invalidate(self, token: str) -> bool:
-        """Report a 401 for ``token``. True: dropped, so the next ``get_token()`` mints.
+    def _invalidate(self, token: str) -> bool:
+        """Behind both ``invalidate()``; the sync class calls it under its lock.
 
         A late report for a token no longer held changes nothing. A token minted
         less than ``REPLACE_COOLDOWN_S`` ago is kept: a 401 that soon is a client or
@@ -167,14 +167,16 @@ class _Credentials:
         often a persistent 401 can mint. While a mint is in flight the report is
         already being acted on.
         """
-        if self._current is None or token != self._current.token:
+        current = self._current
+        if current is None or token != current.token:
             return False
         if self._minting:
             return True
-        if _now() - self._current.issued_at < REPLACE_COOLDOWN_S:
+        age = _now() - current.issued_at
+        if age < REPLACE_COOLDOWN_S:
             logger.warning(
                 "401 on a token minted %d s ago; keeping it until the cooldown ends",
-                int(_now() - self._current.issued_at),
+                int(age),
                 extra={"client_id": self.client_id},
             )
             return False
@@ -203,6 +205,15 @@ class ClientCredentials(_Credentials):
         self._http = http or httpx.Client(verify=verify_ssl, timeout=timeout)
         self._http_owner = http is None  # a client we built is ours to close
         self._lock = threading.Lock()
+
+    def invalidate(self, token: str) -> bool:
+        """Report a 401 for ``token``. True: dropped, so the next ``get_token()`` mints.
+
+        Under the credential's lock: a report that arrives while another thread
+        mints waits for it, then finds the fresh token and leaves it alone.
+        """
+        with self._lock:
+            return self._invalidate(token)
 
     def get_token(self, *, force_refresh: bool = False) -> AccessToken:
         """The cached token, refreshed shortly before it expires.
@@ -276,6 +287,14 @@ class AsyncClientCredentials(_Credentials):
         self._http = http or httpx.AsyncClient(verify=verify_ssl, timeout=timeout)
         self._http_owner = http is None  # a client we built is ours to close
         self._lock = asyncio.Lock()
+
+    def invalidate(self, token: str) -> bool:
+        """Report a 401 for ``token``. True: dropped, so the next ``get_token()`` mints.
+
+        No lock: there is no ``await`` here, so the check and the drop are one step
+        on the event loop; a mint in flight shows through ``_minting``.
+        """
+        return self._invalidate(token)
 
     async def get_token(self, *, force_refresh: bool = False) -> AccessToken:
         """The cached token, refreshed shortly before it expires.
