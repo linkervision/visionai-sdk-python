@@ -67,6 +67,8 @@ dmypy.json
 
 # Local test usage
 examples/
+# The relay protocol's ADR examples are package data, not scratch files.
+!src/visionai_sdk_python/relay/examples/
 
 # Claude
 .claude/
