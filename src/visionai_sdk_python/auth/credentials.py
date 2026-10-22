@@ -22,6 +22,8 @@ from .._base import _BaseClient
 from .._request_attribution import merge_request_attribution
 from ..endpoints import AuthEndpoint
 from ..exceptions import (
+    AuthenticationError,
+    PermissionDeniedError,
     RateLimitedError,
     VisionaiSDKError,
     from_transport_error,
@@ -36,6 +38,8 @@ logger = logging.getLogger(__name__)
 REFRESH_BUFFER_S = 300
 # After a 429 no mint is tried for this long.
 RATE_LIMIT_COOLDOWN_S = 3600
+# After a failed refresh the current token is served and no mint is tried for this long.
+REFRESH_RETRY_S = 30
 
 _now = time.monotonic
 
@@ -70,6 +74,7 @@ class _Credentials:
         self._url = _BaseClient._build_url(self.auth_url, AuthEndpoint.CLIENT_TOKEN)
         self._current: AccessToken | None = None  # the token this credential holds
         self._blocked_until = 0.0
+        self._retry_after = 0.0  # set by a failed refresh
 
     def is_for(self, client_id: str, client_secret: str) -> bool:
         """True when this credential was built for exactly these client credentials."""
@@ -125,12 +130,22 @@ class _Credentials:
         return self._current
 
     def _after_failed_refresh(self, error: VisionaiSDKError) -> AccessToken:
-        """A refresh failed: keep serving the current token while it is valid, else raise."""
+        """A refresh failed: keep serving the current token while it is valid, else raise.
+
+        No mint is tried again for ``REFRESH_RETRY_S``. A refusal (401 / 403) is kept
+        too, because the issued token stays valid until it expires; it is logged as an
+        error since only the client credentials can be wrong.
+        """
         valid = self._valid()
         if valid is None:
             raise error
-        logger.warning(
-            "token refresh failed; using the current token until it expires",
+        self._retry_after = _now() + REFRESH_RETRY_S
+        refused = isinstance(error, (AuthenticationError, PermissionDeniedError))
+        logger.log(
+            logging.ERROR if refused else logging.WARNING,
+            "token refresh refused; check the client credentials"
+            if refused
+            else "token refresh failed; using the current token until it expires",
             extra={
                 "client_id": self.client_id,
                 "error": str(error),
@@ -166,7 +181,9 @@ class ClientCredentials(_Credentials):
         """The cached token, refreshed shortly before it expires.
 
         ``force_refresh=True`` mints even while the cached token is fresh. A refresh
-        that fails keeps serving the current token while Platform still accepts it.
+        that fails keeps serving the current token while Platform still accepts it
+        and is not retried for ``REFRESH_RETRY_S``; a refused one (401 / 403) is kept
+        too, logged as an error.
 
         Raises:
             AuthenticationError: Platform refused the client credentials (401).
@@ -179,6 +196,10 @@ class ClientCredentials(_Credentials):
                 fresh = self._fresh()
                 if fresh is not None:
                     return fresh
+                if _now() < self._retry_after:
+                    valid = self._valid()
+                    if valid is not None:
+                        return valid  # a refresh just failed; not again yet
             try:
                 kwargs = self._begin_mint()
                 try:
@@ -237,6 +258,10 @@ class AsyncClientCredentials(_Credentials):
                 fresh = self._fresh()
                 if fresh is not None:
                     return fresh
+                if _now() < self._retry_after:
+                    valid = self._valid()
+                    if valid is not None:
+                        return valid  # a refresh just failed; not again yet
             try:
                 kwargs = self._begin_mint()
                 try:

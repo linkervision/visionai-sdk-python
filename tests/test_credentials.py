@@ -22,6 +22,7 @@ from visionai_sdk_python.auth import credentials as credentials_module
 from visionai_sdk_python.auth.credentials import (
     RATE_LIMIT_COOLDOWN_S,
     REFRESH_BUFFER_S,
+    REFRESH_RETRY_S,
 )
 from visionai_sdk_python.exceptions import (
     AuthenticationError,
@@ -344,3 +345,39 @@ async def test_get_access_token_force_refresh_mints_again(platform, clock):
 
     assert (first.access_token, second.access_token) == ("tok-1", "tok-2")
     assert await client._ensure_token() == "tok-2"
+
+
+async def test_a_failed_refresh_is_not_retried_for_a_while(platform, cred, clock):
+    assert (await cred.get_token()).token == "tok-1"
+    clock[0] += EXPIRES_IN - 100  # inside the refresh window, token still valid
+    platform.status = 503
+
+    assert (await cred.get_token()).token == "tok-1"
+    assert (await cred.get_token()).token == "tok-1"  # inside the backoff: no attempt
+    assert len(platform.requests) == 2
+
+    clock[0] += REFRESH_RETRY_S + 1
+    platform.status = None
+    assert (await cred.get_token()).token == "tok-2"
+    assert len(platform.requests) == 3
+
+
+async def test_a_refused_refresh_is_an_error_but_the_token_is_kept(
+    platform, cred, clock, caplog
+):
+    assert (await cred.get_token()).token == "tok-1"
+    clock[0] += EXPIRES_IN - 100
+    platform.status = 401
+
+    with caplog.at_level("ERROR"):
+        assert (await cred.get_token()).token == "tok-1"
+
+    assert "token refresh refused" in caplog.text
+    assert caplog.records[-1].levelname == "ERROR"
+
+
+def test_a_credential_of_the_other_flavour_is_rejected_at_construction():
+    with pytest.raises(TypeError):
+        Client(AUTH_URL, credential=AsyncClientCredentials(AUTH_URL, "id", "secret"))
+    with pytest.raises(TypeError):
+        AsyncClient(AUTH_URL, credential=ClientCredentials(AUTH_URL, "id", "secret"))
