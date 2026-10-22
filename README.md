@@ -130,7 +130,8 @@ client = Client(auth_url="...", vlm_url="...", credential=cred)   # vlm.chat() u
 
 token = cred.get_token().token          # for a WebSocket upgrade or another library
 
-# Any other HTTP call with the same token; a 401 gets one fresh token and one retry
+# Any other HTTP call with the same token, sent to the host you name; a 401 gets one
+# fresh token and one retry
 nodes = client.request("GET", "https://vs.example.com/mgmt/nodes").json()
 ```
 
