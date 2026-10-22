@@ -243,6 +243,12 @@ async def test_get_access_token_keeps_its_result_and_refreshes_through_a_credent
     assert await client._ensure_token() == "tok-2"
 
 
+def test_is_for_compares_non_ascii_secrets_too():
+    cred = ClientCredentials(AUTH_URL, "cid", "pässwörd")
+    assert cred.is_for("cid", "pässwörd")
+    assert not cred.is_for("cid", "pässword")
+
+
 async def test_repeated_get_access_token_reuses_the_credential(platform, clock):
     client = AsyncClient(AUTH_URL, VLM_URL)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(platform.handler))

@@ -79,7 +79,7 @@ class _Credentials:
     def is_for(self, client_id: str, client_secret: str) -> bool:
         """True when this credential was built for exactly these client credentials."""
         return self.client_id == client_id.strip() and hmac.compare_digest(
-            self._client_secret, client_secret
+            self._client_secret.encode(), client_secret.encode()
         )
 
     def _fresh(self) -> AccessToken | None:
