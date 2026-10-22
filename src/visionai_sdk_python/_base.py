@@ -102,8 +102,12 @@ class _BaseClient:
 
     @property
     def credential(self) -> "ClientCredentials | AsyncClientCredentials | None":
-        """The credential this client was built with, for callers that need the
-        raw token themselves (a WebSocket upgrade, another HTTP library)."""
+        """The credential currently in use, or None.
+
+        Set by ``credential=`` or by ``auth.get_access_token()``; dropped by
+        ``login()`` / ``set_token()``, whose token then takes over. For callers
+        that need the raw token themselves (a WebSocket upgrade, another HTTP
+        library): ``credential.get_token()`` / ``credential.invalidate(token)``."""
         return self._credential
 
     @staticmethod
