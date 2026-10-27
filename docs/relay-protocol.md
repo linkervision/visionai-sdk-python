@@ -7,9 +7,9 @@ examples below ship as `visionai_sdk_python.relay.examples` and are the fixtures
 relay's and the agent's tests. A protocol change edits this file and the module in one PR; the two
 consumers then bump the SDK.
 
-Why the protocol looks like this, how the relay checks a registration against Platform, how it
-routes and what its HTTP API answers callers are decisions, recorded in platform-service's
-`docs/adr/0001-relay-protocol.md`.
+Why the protocol looks like this is platform-service's `docs/adr/0001-relay-protocol.md`. How the
+relay implements it (the Platform check at `register`, routing, its HTTP API and status mapping) is
+`relay/README.md` in that repository; the agent's side is in visionai-vlm-scheduling-service.
 
 ## 1. Connection
 
