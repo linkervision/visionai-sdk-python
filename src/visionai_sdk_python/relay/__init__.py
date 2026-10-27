@@ -1,7 +1,8 @@
 """The platform-relay wire protocol, shared by platform-relay and platform-edge-agent.
 
-Internal to the platform; the spec is platform-service's
-``docs/adr/0001-relay-protocol.md``. See :mod:`.protocol`.
+Internal to the platform. The wire format is specified in ``docs/relay-protocol.md``
+of this repository; platform-service's ``docs/adr/0001-relay-protocol.md`` records the
+decisions around it. See :mod:`.protocol`.
 """
 
 from .protocol import (

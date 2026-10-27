@@ -1,7 +1,7 @@
 """Wire format between platform-relay and platform-edge-agent.
 
-The spec is platform-service's ``docs/adr/0001-relay-protocol.md``; this module is
-the one implementation both sides import. Frames are JSON objects told apart by
+The spec is ``docs/relay-protocol.md`` in this repository (the decisions behind it:
+platform-service's ADR 0001); this module is the one implementation both sides import. Frames are JSON objects told apart by
 ``type``. Receivers ignore unknown fields, and the string-typed ``reason`` /
 ``code`` fields accept values they do not know, so either side can be upgraded
 first.

@@ -1,4 +1,4 @@
-"""The ADR's JSON examples, shipped so every implementation tests against the same frames.
+"""The wire-format spec's JSON examples, shipped so every implementation tests against the same frames.
 
 ``example("register")`` is the parsed object, ``example_text("register")`` the wire text.
 """
@@ -19,7 +19,7 @@ NAMES = (
 
 
 def example_text(name: str) -> str:
-    """One ADR example as the text that goes over the wire."""
+    """One spec example as the text that goes over the wire."""
     return (files(__package__) / f"{name}.json").read_text(encoding="utf-8")
 
 

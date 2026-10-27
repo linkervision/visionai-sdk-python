@@ -160,11 +160,13 @@ authentication wins. `vlm_url` is optional for clients that only authenticate.
 `visionai_sdk_python.relay` holds the wire format between platform-relay and
 platform-edge-agent: the frame models, the constants and `parse_agent_frame()` /
 `parse_relay_frame()` (text frames only: `bytes` or `None` is an `InvalidFrame`) /
-`dump_frame()` (which refuses a frame over `MAX_FRAME_BYTES`). The spec is platform-service's
-`docs/adr/0001-relay-protocol.md`; both sides import this module instead of keeping a
-copy. The ADR's JSON examples ship with it (`visionai_sdk_python.relay.examples`:
-`example(name)` / `example_text(name)`), so every implementation tests against the same
-frames. It is internal to the platform and not a public API.
+`dump_frame()` (which refuses a frame over `MAX_FRAME_BYTES`). The spec is
+[`docs/relay-protocol.md`](docs/relay-protocol.md); both sides import this module instead of
+keeping a copy, and a protocol change edits the spec and the module in one PR. The spec's
+JSON examples ship with it (`visionai_sdk_python.relay.examples`: `example(name)` /
+`example_text(name)`), so every implementation tests against the same frames. The decisions
+behind the protocol are platform-service's `docs/adr/0001-relay-protocol.md`. It is internal
+to the platform and not a public API.
 
 ## VLM Inference
 
