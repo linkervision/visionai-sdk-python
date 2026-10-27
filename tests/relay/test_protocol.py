@@ -104,6 +104,13 @@ def test_unknown_reasons_and_codes_are_accepted_as_strings():
 @pytest.mark.parametrize(
     ("parse", "text", "message", "request_id"),
     [
+        (
+            parse_agent_frame,
+            b'{"type": "heartbeat"}',
+            "binary frames are not used",
+            None,
+        ),
+        (parse_relay_frame, None, "binary frames are not used", None),
         (parse_agent_frame, "not json", "frame is not JSON", None),
         (parse_agent_frame, "[1, 2]", "frame is not a JSON object", None),
         (parse_agent_frame, '{"agent_id": "a"}', "frame has no type", None),
