@@ -160,19 +160,27 @@ class FrameTooLarge(ValueError):
         self.size = size
 
 
-def parse_agent_frame(text: str) -> AgentFrame:
-    """A frame the relay received from an agent."""
-    return _parse(text, _agent_frame)
+def parse_agent_frame(message: str | bytes | None) -> AgentFrame:
+    """A frame the relay received from an agent.
+
+    ``message`` is what the WebSocket library handed over: ``str`` for a text frame,
+    ``bytes`` (or Starlette's ``None``) for a binary one, which the protocol does
+    not use and is an ``InvalidFrame`` like any other unreadable frame.
+    """
+    return _parse(message, _agent_frame)
 
 
-def parse_relay_frame(text: str) -> RelayFrame:
-    """A frame the agent received from the relay."""
-    return _parse(text, _relay_frame)
+def parse_relay_frame(message: str | bytes | None) -> RelayFrame:
+    """A frame the agent received from the relay; see ``parse_agent_frame``."""
+    return _parse(message, _relay_frame)
 
 
-def _parse(text: str, adapter: TypeAdapter):
+def _parse(message: str | bytes | None, adapter: TypeAdapter):
+    if not isinstance(message, str):
+        # json.loads() would happily read JSON out of a binary frame; say no once here.
+        raise InvalidFrame("binary frames are not used")
     try:
-        data = json.loads(text)
+        data = json.loads(message)
     except ValueError:
         raise InvalidFrame("frame is not JSON") from None
     if not isinstance(data, dict):
