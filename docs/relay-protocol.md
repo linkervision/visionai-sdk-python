@@ -69,7 +69,7 @@ unknown fields.
 | `cluster_id` | string | The agent's site, from its own configuration: the value vlm-mgmt reports as `VLM_CLUSTER_NAME` and Platform stores in `Node.cluster`. Required. |
 | `workspaces` | array of object | `{"id", "models"}` per workspace the agent serves. `id` is the workspace's Platform id, a lowercase hyphenated UUID. Complete list; replaces the previous one. |
 | `models` | array of object | `{"name", "version", "replicas"}` per model the workspace's VS lists as available (§3). Empty when it lists none. |
-| `replicas` | integer | Required. Available nodes listing that model and version (§3); weights the relay's routing. |
+| `replicas` | integer | Required; a `register` without it is invalid (§5). Available nodes listing that model and version (§3); weights the relay's routing. |
 | `accepted` | array of string | Workspace ids from `workspaces` the relay registered. |
 | `rejected` | array of object | `{"id", "reason"}` per refused workspace: the workspace id and a reason from §5. |
 | `request_id` | string | UUID v4 minted by the relay. `response` and `error` echo it. |

@@ -71,8 +71,7 @@ class Frame(BaseModel):
 class ModelEntry(Frame):
     name: str
     version: str
-    # Required by the ADR. A receiver counts None as 0 and logs it: the sender has a bug.
-    replicas: int | None = Field(default=None, ge=0)
+    replicas: int = Field(ge=0)
 
 
 class WorkspaceEntry(Frame):
