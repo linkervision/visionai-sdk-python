@@ -1,0 +1,4 @@
+{"type": "error",
+ "request_id": "7f3c2a1e-9d4b-4c8a-b2e6-1f5d3a7c9e0b",
+ "code": "upstream_unreachable",
+ "message": "connect to vlm-scheduling-service-backend.31a6638a-5c2e-4f1b-9a7d-0e3c6b8d2f41.svc.cluster.local:80 failed"}
