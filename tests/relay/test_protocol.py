@@ -82,13 +82,12 @@ def test_unknown_fields_are_ignored_on_both_sides():
     )
 
 
-def test_missing_replicas_parses_as_none_for_the_receiver_to_count_as_zero():
-    frame = parse_agent_frame(
-        '{"type": "register", "agent_id": "a", "cluster_id": "c",'
-        ' "workspaces": [{"id": "x", "models": [{"name": "m", "version": "1"}]}]}'
-    )
-
-    assert frame.workspaces[0].models[0].replicas is None
+def test_register_without_replicas_is_invalid():
+    with pytest.raises(InvalidFrame):
+        parse_agent_frame(
+            '{"type": "register", "agent_id": "a", "cluster_id": "c",'
+            ' "workspaces": [{"id": "x", "models": [{"name": "m", "version": "1"}]}]}'
+        )
 
 
 def test_unknown_reasons_and_codes_are_accepted_as_strings():
