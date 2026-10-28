@@ -34,9 +34,12 @@ Sec-WebSocket-Protocol: platform-relay.v1
 ```
 
 - `Authorization` is a platform M2M token (client credentials). A refused upgrade is an HTTP
-  status, not a close code: 400 when the relay knows none of the offered subprotocols, 401 when the
-  token is not accepted (the agent fetches a new token, once, and reconnects), 503 when the relay
-  could not validate it (the agent retries with the same token).
+  status, not a close code, with a JSON body `{"detail": "<why>"}`: 400 when the relay knows none
+  of the offered subprotocols; 401 when Platform does not accept the token (the agent fetches a new
+  token, once, and reconnects); 403 when the token is valid but the relay does not serve that
+  identity, a user token or a client outside its allowlist (a new token would not help: the agent
+  keeps it and retries after its backoff); 503 when the relay got no answer from Platform, a 429 of
+  its auth-failure throttle included (the agent retries with the same token).
 - `Sec-WebSocket-Protocol` carries the protocol version (§6).
 - After `101` the connection is the identity. Messages carry no agent or tenant fields.
 
