@@ -1,0 +1,9 @@
+{"type": "response",
+ "request_id": "7f3c2a1e-9d4b-4c8a-b2e6-1f5d3a7c9e0b",
+ "status": 200,
+ "headers": {"Content-Type": "application/json"},
+ "body": {"chat_id": "high:1760424000123-3f9a1c7e",
+          "status": "completed",
+          "message": "{\"description\": \"A forklift in a warehouse aisle.\"}",
+          "dispatch": {"model_name": "cr2-8b", "model_version": "4.5.0",
+                       "api_endpoint": "http://cr2-8b:8000"}}}
