@@ -129,12 +129,25 @@ cred = ClientCredentials(
 )
 client = Client(auth_url="...", vlm_url="...", credential=cred)   # vlm.chat() uses it
 
-token = cred.get_token().token          # for requests the SDK does not make itself
+token = cred.get_token().token          # for a WebSocket upgrade or another library
+
+# Any other HTTP call with the same token, sent to the host you name; a 401 gets one
+# fresh token and one retry
+nodes = client.request("GET", "https://vs.example.com/mgmt/nodes").json()
 ```
+
+`request()` raises on a non-2xx like the resource methods (`AuthenticationError`,
+`ClientError`, `ServerError`, ...), unlike plain httpx, and sends the token to whatever
+host `url` names, so `url` comes from configuration or code, never from a caller. A
+client built with `http_client=` (or a credential with `http=`) uses that client's TLS,
+timeout and limits; passing `verify_ssl` / `timeout` / `max_connections` /
+`max_keepalive_connections` with it raises `ValueError`.
 
 A mint is a Platform round trip and, on sites that cap client tokens, a scarce one:
 concurrent callers share one mint, a refresh that fails keeps the current token while
-Platform still accepts it, and after a 429 no mint is tried for an hour
+Platform still accepts it, a 401 on a token minted more than 30 minutes ago buys a
+replacement (`cred.invalidate(token)`; a younger one is kept, so a persistent 401
+mints at most twice an hour), and after a 429 no mint is tried for an hour
 (`RateLimitedError`). `get_token(force_refresh=True)` mints on demand.
 
 `client.auth.get_access_token(client_id, client_secret)` still works and now builds a
