@@ -45,8 +45,7 @@ class VLMResource(VLMMixin):
             NetworkError: If the request times out or a network error occurs.
             VisionaiSDKError: If the request fails for any other reason.
         """
-        # Ensure token is valid
-        self._sdk_client._ensure_token()
+        token = self._sdk_client._ensure_token()
 
         # Prepare request (from Mixin)
         body = self._prepare_chat_request(payload)
@@ -54,8 +53,10 @@ class VLMResource(VLMMixin):
         # I/O operation (sync)
         response = self._sdk_client._request(
             "POST",
-            self._sdk_client._build_url(self._sdk_client.vlm_url, VLMEndpoint.CHAT),
-            headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
+            self._sdk_client._build_url(
+                self._sdk_client._require_vlm_url(), VLMEndpoint.CHAT
+            ),
+            headers=self._sdk_client._build_auth_header(token),
             json=body,
         )
 
@@ -80,16 +81,15 @@ class VLMResource(VLMMixin):
             NetworkError: If the request times out or a network error occurs.
             VisionaiSDKError: If the request fails for any other reason.
         """
-        # Ensure token is valid
-        self._sdk_client._ensure_token()
+        token = self._sdk_client._ensure_token()
 
         # I/O operation (sync)
         response = self._sdk_client._request(
             "GET",
             self._sdk_client._build_url(
-                self._sdk_client.vlm_url, f"{VLMEndpoint.CHAT}/{result_id}"
+                self._sdk_client._require_vlm_url(), f"{VLMEndpoint.CHAT}/{result_id}"
             ),
-            headers=self._sdk_client._build_auth_header(self._sdk_client._access_token),
+            headers=self._sdk_client._build_auth_header(token),
         )
 
         # Parse response (from Mixin)

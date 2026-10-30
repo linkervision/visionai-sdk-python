@@ -216,11 +216,10 @@ async def test_get_access_token_success(mock_client: AsyncClient) -> None:
     # Assert
     assert isinstance(result, TokenResponse)
     assert result.access_token == TOKEN_PAYLOAD["access_token"]
-    # Assert store token
-    assert mock_client._access_token == TOKEN_PAYLOAD["access_token"]
-    assert mock_client._is_token_expiring_soon is not None
-    assert mock_client._credentials == {"client_id": "admin", "client_secret": "secret"}
-    assert mock_client._credentials_type == "client"
+    assert result.token_type == TOKEN_PAYLOAD["token_type"]
+    # The credential now lives on the client and serves later calls.
+    assert mock_client._credential is not None
+    assert mock_client._credential.is_for("admin", "secret")
 
 
 @pytest.mark.asyncio

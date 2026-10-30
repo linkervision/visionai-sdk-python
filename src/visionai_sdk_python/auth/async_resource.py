@@ -7,6 +7,7 @@ import jwt
 from ..endpoints import AuthEndpoint
 from ..exceptions import JwksDiscoveryError
 from ._mixin import AuthMixin
+from .credentials import AsyncClientCredentials
 from .models import TokenResponse
 
 if TYPE_CHECKING:
@@ -27,16 +28,25 @@ class AsyncAuthResource(AuthMixin):
         self._sdk_client = client
 
     async def get_access_token(
-        self, client_id: str, client_secret: str
+        self, client_id: str, client_secret: str, *, force_refresh: bool = False
     ) -> TokenResponse:
         """Get access token using client credentials flow.
 
-        The token is stored internally and will be used automatically for subsequent
-        API calls. If the token expires, it will be automatically refreshed.
+        The client keeps the resulting credential and uses it for subsequent API
+        calls, minting a new token when the current one expires. Calling this
+        again with the same client credentials returns the cached token;
+        ``force_refresh=True`` mints a new one. A later ``login()`` or
+        ``set_token()`` replaces the credential: the last explicit
+        authentication wins.
+
+        New code should build a ``ClientCredentials`` / ``AsyncClientCredentials``
+        and pass it as ``credential=`` to the client instead; this method stays for
+        existing callers.
 
         Args:
             client_id: OAuth client ID
             client_secret: OAuth client secret
+            force_refresh: Mint a new token even if a fresh one is cached.
 
         Returns:
             TokenResponse with access_token, expires_in, and token_type
@@ -49,20 +59,28 @@ class AsyncAuthResource(AuthMixin):
         # Validate (from Mixin)
         self._validate_client_credentials(client_id, client_secret)
 
-        # I/O operation (async)
-        response = await self._sdk_client._request(
-            "POST",
-            self._sdk_client._build_url(
-                self._sdk_client.auth_url, AuthEndpoint.CLIENT_TOKEN
-            ),
-            json=self._prepare_client_token_request(client_id, client_secret),
-        )
-
-        # Parse and store (from Mixin)
-        return self._parse_and_store_token(
-            response.json(),
-            credentials={"client_id": client_id, "client_secret": client_secret},
-            credentials_type="client",
+        # One credential per client: cached, one mint at a time, no mint for an
+        # hour after a 429. Calling this again with the
+        # same client credentials reuses it, so it does not mint again.
+        credential = self._sdk_client._credential
+        if not (
+            isinstance(credential, AsyncClientCredentials)
+            and credential.is_for(client_id, client_secret)
+        ):
+            credential = AsyncClientCredentials(
+                self._sdk_client.auth_url,
+                client_id,
+                client_secret,
+                http=self._sdk_client._client,
+            )
+        token = await credential.get_token(force_refresh=force_refresh)
+        # Installed only once it works, and over a login() / set_token() token:
+        # the last explicit authentication wins.
+        self._sdk_client._credential = credential
+        return TokenResponse(
+            access_token=token.token,
+            expires_in=token.expires_in(),
+            token_type=token.token_type,
         )
 
     async def login(self, email: str, password: str) -> TokenResponse:
