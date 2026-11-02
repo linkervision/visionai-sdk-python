@@ -1,0 +1,5 @@
+{"type": "response",
+ "request_id": "7f3c2a1e-9d4b-4c8a-b2e6-1f5d3a7c9e0b",
+ "status": 500,
+ "headers": {"Content-Type": "text/plain; charset=utf-8"},
+ "body": "Internal Server Error"}

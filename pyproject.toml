@@ -33,6 +33,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
 
+[tool.setuptools.package-data]
+"visionai_sdk_python.relay.examples" = ["*.json"]
+
 [tool.uv]
 # Mitigate supply chain attacks. Kept in sync with
 # .github/dependabot.yml's cooldown.default-days (3 days, matching the

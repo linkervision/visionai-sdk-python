@@ -1,0 +1,8 @@
+{"type": "register",
+ "agent_id": "platform-edge-agent-7d9f4b6c8-xk2pq",
+ "cluster_id": "aws-offline-edge",
+ "workspaces": [{"id": "31a6638a-5c2e-4f1b-9a7d-0e3c6b8d2f41",
+                 "models": [{"name": "cr2-8b", "version": "4.5.0", "replicas": 2},
+                            {"name": "cr2-8b", "version": "4.6.0", "replicas": 1}]},
+                {"id": "7589d018-2b4c-4e6f-8a1d-3c5e7f9b1d23", "models": []},
+                {"id": "QA Workspace", "models": []}]}
